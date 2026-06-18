@@ -243,20 +243,45 @@ class BotdController:
 
 	async def _run_countdown(self, total, fastest_txt):
 		"""Announce the knockout start, then re-announce at each COUNTDOWN_MARK below
-		the total, sleeping the remainder before the handoff."""
+		the total, sleeping the remainder before the handoff. A right-side overlay
+		ticks the same countdown client-side for everyone watching."""
 		await self.instance.chat(
 			'$09f>>> Practice closed — fastest: $fff{}$09f. Knockout in $fff{}$09f!'.format(
 				fastest_txt, human_duration(total)))
-		remaining = total
-		for mark in COUNTDOWN_MARKS:
-			if mark >= remaining:
-				continue
-			await asyncio.sleep(remaining - mark)
-			remaining = mark
-			await self.instance.chat(
-				'$09f>>> Knockout in $fff{}$09f — get ready!'.format(human_duration(mark)))
-		if remaining > 0:
-			await asyncio.sleep(remaining)
+		await self._show_countdown_overlay(total)
+		try:
+			remaining = total
+			for mark in COUNTDOWN_MARKS:
+				if mark >= remaining:
+					continue
+				await asyncio.sleep(remaining - mark)
+				remaining = mark
+				await self.instance.chat(
+					'$09f>>> Knockout in $fff{}$09f — get ready!'.format(human_duration(mark)))
+			if remaining > 0:
+				await asyncio.sleep(remaining)
+		finally:
+			# Always clear the overlay -- including when the BOTD is stopped mid
+			# countdown (which cancels the waiter task and unwinds through here).
+			await self._hide_countdown_overlay()
+
+	async def _show_countdown_overlay(self, total):
+		cd = getattr(self.app, 'botd_countdown', None)
+		if cd is None or total <= 0:
+			return
+		try:
+			await cd.start(total)
+		except Exception:
+			logger.exception('Knockout: BOTD countdown overlay failed to show')
+
+	async def _hide_countdown_overlay(self):
+		cd = getattr(self.app, 'botd_countdown', None)
+		if cd is None:
+			return
+		try:
+			await cd.hide()
+		except Exception:
+			pass
 
 	async def set_countdown(self, player, seconds):
 		try:

@@ -10,9 +10,10 @@ from .season import SeasonController
 from .controllers.live import LiveController
 from .markers import MarkersController
 from .config import PresetConfig
-from .views import CupWidget, CupTicker, CupLowerThird, MatchHud, FinishCountdown
+from .views import CupWidget, CupTicker, CupLowerThird, MatchHud, FinishCountdown, BotdCountdown
 from . import score_modes
 from . import callbacks
+from .loader_fix import install_selfhealing_loader
 from .models import MatchInfo, PlayerScore, CupInfo, CupMatch  # noqa: F401  (registers tables)
 
 
@@ -194,6 +195,13 @@ class KnockoutConfig(AppConfig):
 		)
 
 	async def on_start(self):
+		# PyPlanet's jinja loader caches its app->templates mapping once and never
+		# picks up apps loaded later via a mode change. BOTD switches modes, which
+		# reloads mode-gated contrib apps (e.g. live_rankings) after that cache is
+		# frozen -- their templates then 404 and their on_start dies. Make the
+		# loader self-heal before any of that can happen. See loader_fix.py.
+		install_selfhealing_loader()
+
 		# Single-login KO callbacks (join / knockout / winner). Their array siblings
 		# (KORoundOrder, KORoundStart, KOMatchStandings, KOShield*) are registered by
 		# the controllers that own them; all parsing lives in callbacks.py.
@@ -234,6 +242,10 @@ class KnockoutConfig(AppConfig):
 		# Lower-right "FINISH NOW" countdown, armed by the LiveController on the
 		# first finish of a live round (mirrors the mode's S_FinishCountdown).
 		self.finish_countdown = FinishCountdown(self)
+
+		# Right-side "KNOCKOUT IN" countdown, armed by the BotdController during the
+		# BOTD handoff (practice cutoff -> knockout load).
+		self.botd_countdown = BotdCountdown(self)
 
 		# Live match state drives the overlays and marker events.
 		self.live = LiveController(self)

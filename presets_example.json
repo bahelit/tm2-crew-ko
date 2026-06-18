@@ -1,0 +1,40 @@
+{
+	"names": {
+		"weekly": {
+			"name": "Weekly Knockout Cup",
+			"preset": "knockout_rotate",
+			"payout": "standard",
+			"scoremode": "default",
+			"mapcount": 5
+		},
+		"quick": {
+			"name": "Quick Knockout",
+			"preset": "knockout_single",
+			"scoremode": "flat",
+			"mapcount": 3
+		}
+	},
+	"presets": {
+		"knockout_rotate": {
+			"script": "Modes/TrackMania/Knockout.Script.txt",
+			"settings": {
+				"S_RoundsPerMap": 1,
+				"S_FinishTimeout": 20,
+				"S_DoubleKnockUntil": 20,
+				"S_ForceLapsNb": 0
+			}
+		},
+		"knockout_single": {
+			"script": "Modes/TrackMania/Knockout.Script.txt",
+			"settings": {
+				"S_RoundsPerMap": 0,
+				"S_FinishTimeout": 15,
+				"S_DoubleKnockUntil": 20
+			}
+		}
+	},
+	"payouts": {
+		"standard": [500, 250, 100],
+		"big": [2000, 1000, 500, 250, 100]
+	}
+}

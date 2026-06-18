@@ -1,0 +1,12 @@
+<frame pos="-160. 40." z-index="0">
+	<quad pos="0. 0." size="46. {{ 8 + rows|length * 4 }}." halign="left" valign="top"
+		style="Bgs1InRace" substyle="BgCardSystem" opacity="0.7" />
+	<label pos="2. -2." size="42. 4." halign="left" valign="top"
+		textsize="1" textcolor="FFCC00" text="{{ title }}" />
+	{% for row in rows %}
+	<label pos="2. {{ row.y }}" size="32. 3.5." halign="left" valign="top"
+		textsize="1" text="{{ row.rank }}. {{ row.nickname }}" />
+	<label pos="44. {{ row.y }}" size="8. 3.5." halign="right" valign="top"
+		textsize="1" textcolor="FFFFFF" text="{{ row.points }}" />
+	{% endfor %}
+</frame>

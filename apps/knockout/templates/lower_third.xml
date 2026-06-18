@@ -1,0 +1,6 @@
+<frame pos="0. -38." z-index="0">
+	<quad pos="0. 0." size="120. 8." halign="center" valign="center"
+		style="Bgs1InRace" substyle="BgCardSystem" opacity="0.85" />
+	<label pos="0. 0." size="116. 5." halign="center" valign="center"
+		textsize="2" textfont="GameFontBlack" textcolor="FFFFFF" text="{{ text }}" />
+</frame>

@@ -1,0 +1,20 @@
+<frame pos="0. 50." z-index="0">
+	{% if showdown %}
+	<quad pos="0. 0." size="70. 9." halign="center" valign="top"
+		style="Bgs1InRace" substyle="BgCardSystem" opacity="0.8" />
+	<label pos="0. -1.5." size="68. 4." halign="center" valign="top"
+		textsize="2" textfont="GameFontBlack" textcolor="FF2222" text="FINAL 2 — SHOWDOWN" />
+	<label pos="0. -5.5." size="68. 3." halign="center" valign="top"
+		textsize="1" textcolor="FFFFFF" text="{{ racing_names|join('   vs   ') }}" />
+	{% else %}
+	<quad pos="0. 0." size="46. {{ 6 + danger_rows|length * 3 }}." halign="center" valign="top"
+		style="Bgs1InRace" substyle="BgCardSystem" opacity="0.7" />
+	<label pos="0. -1.5." size="44. 4." halign="center" valign="top"
+		textsize="2" textfont="GameFontBlack" textcolor="FFCC00"
+		text="{{ count }} RACING" />
+	{% for row in danger_rows %}
+	<label pos="0. {{ row.y }}" size="44. 3." halign="center" valign="top"
+		textsize="1" textcolor="FF3333" text="⚠ {{ row.name }}" />
+	{% endfor %}
+	{% endif %}
+</frame>

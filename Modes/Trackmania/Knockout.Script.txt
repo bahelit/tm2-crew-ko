@@ -1,0 +1,1092 @@
+// -------------------------------------- //
+//  KNOCKOUT — Crew rebuild                 //
+//  Re-based onto RoundsBase2 (ManiaPlanet 4 / TM2 framework).               //
+//  script version: 2.0.0                  //
+// -------------------------------------- //
+//
+// Slowest racer(s) eliminated each round until one winner remains. Emits the
+// KO* XmlRpc callback contract consumed by the PyPlanet app (see
+// KNOCKOUT_REBUILD_SPEC.md section 3.1 and apps/knockout/callbacks.py).
+//
+// ============================ RE-BASE NOTES =============================
+// Ported from the old domino54 Knockout (which extended the *deprecated* legacy
+// RoundsBase / legacy ModeBase). The live chain is RoundsBase2 -> ModeTrackmania
+// -> ModeMatchmaking2 -> ModeBase2 (the generic ModeMatchmaking2/ModeBase2), which
+// is a DIFFERENT generation than the legacy ModeBase. Concretely that meant:
+//   * Round plugs use their Match_* / Rounds_* forms and stack AFTER the base's
+//     (ManiaScript stacks ***Label*** defs across #Extends at the +++Label+++ /
+//     ---Label--- site, parent first then child). Match_LogVersions is plural
+//     (injected by ModeTrackmania); spawning is the ---Rounds_CanSpawn--- override
+//     (survivors = IsRacing); "wait for >=2 players" is the Rounds_WaitForPlayers
+//     hook; MB_WarmUp(0, 0) = no mode warm-up (BOTD TimeAttack is the warm-up);
+//     matchmaking off via Match_Settings (MB_Settings_UseDefaultMatchmaking=False).
+//   * XmlRpc:: in this chain binds to Libs/Nadeo/XmlRpc2 (RegisterCallback /
+//     UnregisterCallback / PassOn exist there, but NOT SendCallbackArray /
+//     CallbackIsAllowed). We include Libs/Nadeo/TrackMania/XmlRpc.Script.txt as
+//     XmlRpcTM for the custom-callback sender; the engine registry is shared.
+//   * The legacy ST2:: scores-table column API is gone (that table is a compiled
+//     Hud module). The rich live HUD/overlays are rendered by the PyPlanet app;
+//     here we only drive Hud.ScoresTable.SetFooterText. Player/slot colors dropped.
+//   * Legacy->v2 symbol swaps: MapIsLapRace -> Map.TMObjective_IsLapRace;
+//     MB_SectionRoundNb -> MB_GetRoundCount(); MB_StopRound/MB_StopMap are now
+//     FUNCTIONS (MB_StopRound()/MB_StopMap()), round-running read is
+//     MB_RoundIsRunning(); MB_VictoryMessage is gone (podium is automatic, so the
+//     winner is announced via chat); event loops use Events::Valid(Event) (the v2
+//     idiom from stock Rounds), not the legacy PassOn; TM:: (TM3) replaces TM2::;
+//     domino54 -> our Libs/crew/Notify.
+//   * Round-end cutoff uses the base mechanism: RoundsBase2 sets CutOffTimeLimit =
+//     GetFinishTimeout() when S_UseAlternateRules. We provide GetFinishTimeout()
+//     (the base calls it). "First finisher" is detected with G_FirstFinisherSeen.
+//
+// ===================== VALIDATE ON A LIVE SERVER (Phase 4) ==============
+// Compiles against this server's stock chain. Still smoke-test on a dev server
+// (use S_DebugBotsCount and //ko hud):
+//   1. Plug stacking fires for Rounds_CanSpawn / Match_StartRound / Match_PlayLoop
+//      defined in this grandchild of RoundsBase2 (eliminated bots must not respawn).
+//   2. CTmScore.Points stays a writable survival counter here (we += it on each
+//      elimination and emit it in KOMatchStandings). If the base overwrites it,
+//      move survival tracking to a private per-login variable.
+//   3. No double round-stop at the field-of-1 endgame (RoundsBase2's play loop
+//      also stops the round; ours calls MB_StopRound() when <=1 remain).
+//   4. All 8 KO* callbacks arrive in the PyPlanet log under
+//      S_UseLegacyXmlRpcCallbacks = 0 (PyPlanet forces this).
+
+#Extends "Modes/TrackMania/Base/RoundsBase2.Script.txt"
+
+#Const Version		"2026-06-17"
+#Const ScriptName	"Knockout.Script.txt"
+
+// Our own minimal message lib (no domino54).
+#Include "Libs/crew/Notify.Script.txt" as Notify
+#Include "TextLib" as TL
+// In the RoundsBase2 chain, ModeBase2 binds XmlRpc:: to Libs/Nadeo/XmlRpc2 — which
+// has RegisterCallback / UnregisterCallback / PassOn but NOT the SendCallbackArray /
+// CallbackIsAllowed helpers. Pull in the TrackMania XmlRpc lib under its own alias
+// for those two. The engine's XML-RPC callback registry is shared, so names declared
+// with XmlRpc::RegisterCallback are visible to XmlRpcTM::CallbackIsAllowed.
+#Include "Libs/Nadeo/TrackMania/XmlRpc.Script.txt" as XmlRpcTM
+
+// ---------------------------------- //
+// Settings
+// ---------------------------------- //
+#Setting S_RoundsPerMap			0		as _("Number of rounds per map (0 = infinite):")
+#Setting S_DoubleKnockUntil		20		as _("DoubleKO - knock 2 players until (0 = disabled):")
+#Setting S_PracticeRounds		0		as _("Practice rounds before eliminations start (0 = disabled):")
+#Setting S_FinishCountdown		30		as _("Seconds to finish after the first player (DNFs the rest):")
+#Setting S_EnableShields		False	as _("Earned shields: round winner banks a one-time save:")
+#Setting S_DebugBotsCount		0		as _("Number of fake players (debug only):")
+#Setting S_AdminHoldStart		False	as "<hidden>" ///< Allows event admin to pause start of the next Knockout
+#Setting S_AdminSetPause		False	as "<hidden>" ///< Allows event admin to pause match before next round
+#Setting S_ShowMultilapInfo		True	as "<hidden>" ///< Laps info visible if laps count > 0
+#Setting S_CustomLayerPath		""		as "<hidden>" ///< Try to load custom layer from an XML file
+#Setting S_PreShieldLogins		""		as "<hidden>" ///< Logins (comma/space separated) granted a shield at match start (e.g. BOTD fastest)
+// Override the base default: knockout plays 1 lap unless a lap map forces more.
+#Setting S_ForceLapsNb		0
+// NOTE: S_FinishTimeout is owned by RoundsBase2 now (do not redeclare). We drive
+// the post-first-finish countdown ourselves with S_FinishCountdown by arming the
+// engine's CutOffTimeLimit (see Match_PlayLoop); the base stops the round when it
+// expires and Match_EndRound DNFs everyone who hadn't finished.
+
+// ---------------------------------- //
+// Constants
+// ---------------------------------- //
+#Const C_RequiredPlayersNb	2	///< Minimum players amount to start the game
+
+// Use the stock Rounds HUD so the scores table shows the survival-POINTS column
+// (the default HUD shows a race-time column instead). Loaded in Match_LoadHud.
+#Const C_HudModulePath "Nadeo/TrackMania/Rounds/Hud.Module.Gbx"
+
+#Const Description _("""$FFFIn $<$F00Knockout$> mode, slowest players are knocked out.
+
+In $<$F00Rounds$> mode, each round the slowest player or all players that did not finish are $<$F00knocked out$>.
+In $<$F00Laps$> mode, every time the first player begins the next lap, the player with the least passed checkpoints is $<$F00knocked out$>.
+In both modes, if someone $<$F00gives up$> all players that finished in Rounds, or everyone in Laps mode, are safe.
+
+The $<$F00winner$> is the last player not knocked out.""")
+
+#Const C_ModeStatusMessage _("""TYPE: Free for all
+OBJECTIVE: Each round or lap the slowest player is knocked out.
+STATUS: %1 players racing, %2 spectators
+""")
+
+/// Colors of player slots in scores table
+#Const C_CardColors [
+	"Alive" => <.5, .5, .5>,	///< Players still racing
+	"Dead" => <0., 0., 0.>,		///< Spectators and players not racing
+	"Safe" => <0., 1., 0.>,		///< Round end: player survived
+	"Knock" => <1., 0., 0.>		///< Round end: player eliminated
+]
+
+#Const C_UI_RequestTimeout	10000	///< Time before UI layer request is canceled
+
+// ---------------------------------- //
+// Globals
+// ---------------------------------- //
+declare Text[] G_PlayersRacing;		///< Logins of racing players
+declare Integer G_RoundsPlayed;		///< Rounds completed this match (used for practice rounds)
+declare Boolean G_NewMatch;			///< Set at Match_StartMatch; triggers a fresh roster seed next round
+declare Text G_PrevRoundOrderSig;	///< Last KORoundOrder signature sent (throttle duplicates)
+declare Boolean G_FirstFinisherSeen;	///< Whether the round's first finisher was handled
+// Xml load
+declare Ident	G_UI_RequestId;			///< Id of the request to the xml file
+declare Integer	G_UI_RequestEndTime;	///< Timeout for the request
+
+// ---------------------------------- //
+// Mode settings: plain FFA, no matchmaking
+// ---------------------------------- //
+***Match_Settings***
+***
+MB_Settings_UseDefaultMatchmaking = False;
+// Load our own HUD module (the Rounds one, with a points column) in Match_LoadHud.
+MB_Settings_UseDefaultHud = False;
+***
+
+// ---------------------------------- //
+// Load the Rounds HUD module so the scores table shows survival points (the
+// default HUD shows a race-time column). Only runs because UseDefaultHud=False.
+// ---------------------------------- //
+***Match_LoadHud***
+***
+Hud_Load(C_HudModulePath);
+MB_SortScores(CTmMode::ETmScoreSortOrder::TotalPoints);
+***
+
+// ---------------------------------- //
+// Start match: flag a fresh roster seed. The seed itself happens in
+// ---Rounds_WaitForPlayers--- on the match's first round, once all players +
+// debug bots have actually joined (Match_StartMatch is too early — the fake
+// users are requested later, in Match_StartMap). This reseeds every new match
+// (so late joiners and post-skip players are included), while survivors carry
+// across maps WITHIN a match (this flag is only set once per match).
+// ---------------------------------- //
+***Match_StartMatch***
+***
+G_NewMatch = True;
+***
+
+// ---------------------------------- //
+// Log version. Singular ***Match_LogVersion*** is what every stock RoundsBase2
+// child (Rounds/Laps/Cup) uses; it is vestigial in the v2 chain (never injected,
+// so MB_LogVersion — a legacy-only function — is never type-checked). The PLURAL
+// +++Match_LogVersions+++ site IS injected (ModeTrackmania:152); filling it would
+// require MB_LogVersion, which does not exist in the ModeBase2 generation.
+// ---------------------------------- //
+***Match_LogVersion***
+***
+MB_LogVersion(ScriptName, Version);
+***
+
+// ---------------------------------- //
+// Start server
+// ---------------------------------- //
+***Match_StartServer***
+***
+// Per-round state shared across the Match_* plug functions. In the v2 plug
+// system each ***Match_*** block compiles to a SEPARATE function, so a plain
+// declare here would not be visible in Match_StartRound/PlayLoop/EndRound.
+// They are declared `for This` (mode-persistent) at each use site instead:
+//   Integer[] RoundFinishTimes     — players' finish times, slowest last
+//   Integer   RoundGiveUpsAmount   — players that gave up this round/lap
+//   Integer[] LapPlayersNbDoubled  — players doubled, per lap index
+//   Integer   PrevMostLapsNb       — previous max reached laps count
+//   Integer   PrevPlayersCount     — previous players count
+
+// ---------------------------------- //
+// XmlRpc — register the KO* callback contract (ports verbatim from the old mode).
+XmlRpc::RegisterCallback("KOPlayerAdded", """
+* Data : An array with the login of the player added to the match
+* Example : ["Login"]
+* Note : This callback is sent when Knockout begins.
+""");
+
+XmlRpc::RegisterCallback("KOPlayerRemoved", """
+* Data : An array with the login of the player removed from the match
+* Example : ["Login"]
+* Note : This callback is sent when a player is knocked out.
+""");
+
+XmlRpc::RegisterCallback("KOSendWinner", """
+* Data : An array with the login of the match winner
+* Example : ["Login"]
+* Note : This callback is sent when the match is over.
+""");
+
+XmlRpc::RegisterCallback("KOMatchStandings", """
+* Data : An array of "Login:Points" entries, one per player, for the finished map.
+* Example : ["winner_login:3", "second_login:2", "third_login:1", "last_login:0"]
+* Note : Sent at map end. Points are the Knockout survival score (highest = winner).
+""");
+
+XmlRpc::RegisterCallback("KORoundOrder", """
+* Data : An ordered array of "Login:Rank:Cps:Time:Finished" entries for the
+*        players still racing this round (Rank 1 = leader, worst is last).
+* Example : ["alice:1:3:42000:1", "bob:2:2:-1:0", "cara:3:1:-1:0"]
+* Note : Sent live during a round when the order changes. Finished is 1/0.
+""");
+
+XmlRpc::RegisterCallback("KORoundStart", """
+* Data : ["CurrentRound:TotalRounds"] for the round that just began.
+* Example : ["3:5"]  (round 3 of 5; TotalRounds is 0 when unbounded)
+""");
+
+XmlRpc::RegisterCallback("KOShieldAwarded", """
+* Data : An array with the login of the player who earned a shield.
+* Example : ["Login"]
+""");
+
+XmlRpc::RegisterCallback("KOShieldUsed", """
+* Data : An array with the login of the player whose shield was spent.
+* Example : ["Login"]
+""");
+
+// Interface
+UI::UnloadModule("PrevBestTime");
+UIManager.UIAll.OverlayHidePersonnalBestAndRank = True;
+
+// Custom layer
+Layers::Create("Custom");
+Layers::Attach("Custom");
+SetCustomLayerFromXml(S_CustomLayerPath);
+
+// Drive the scoreboard's Points column (Score.Points) from the library's MATCH
+// points bucket, so our survival counter persists across rounds/maps and through
+// the podium (the default is map points, which the engine clears each new map).
+// Our KnockoutPlayer() feeds this bucket via Scores::AddPlayerMatchPoints().
+Scores::SaveInScore(Scores::C_Points_Match);
+
+// ---------------------------------- //
+// Scores Table. The rich per-player live HUD/overlays are rendered by the PyPlanet
+// app (apps/knockout/views). The legacy ST2:: column API (custom CP/Time columns,
+// per-cell colors) does not exist in the RoundsBase2 generation — that table is a
+// compiled Hud module. We keep the stock Hud module and only drive its footer text
+// (see UpdateScoresTableFooter); gameplay and the KO* callbacks are unaffected.
+***
+
+// ---------------------------------- //
+// Init map
+// ---------------------------------- //
+***Match_InitMap***
+***
+if (GetRacingPlayersAmount() <= 1) {
+	G_PlayersRacing.clear();
+}
+
+UIManager.UIAll.OverlayHideMultilapInfos = (S_ShowMultilapInfo && S_ForceLapsNb <= 0);
+foreach (Score in Scores) Score.BestRace = Null;
+***
+
+// ---------------------------------- //
+// Start map
+// ---------------------------------- //
+***Match_StartMap***
+***
+// Create debug bots (if any) up front, so they have joined Players by the time
+// the round loop's WaitForPlayers / roster seeding runs (stock modes do this here).
+Users_SetNbFakeUsers(S_DebugBotsCount, 0);
+
+UpdatePlayerColors();
+
+// No mode warm-up (count 0): BOTD's TimeAttack practice is the warm-up.
+MB_WarmUp(0, 0);
+UpdatePlayerColors();
+
+// Each map is a fresh knockout: flag a roster reseed so everyone present at this
+// map's start (including players who joined mid-previous-knockout or after a
+// //skip) is entered. The seed itself runs in ---Rounds_WaitForPlayers--- below,
+// AFTER players + bots have actually joined (the fake users requested above are
+// not yet in Players here).
+G_NewMatch = True;
+
+// ---------------------------------- //
+// Announce a fresh match when the racing set is empty.
+if (GetRacingPlayersAmount() <= 1) UIManager.UIAll.BigMessage = _("New match");
+if (!ServerShutdownRequested && !MatchEndRequested) MB_Sleep(3000);
+UIManager.UIAll.BigMessage = "";
+***
+
+// ---------------------------------- //
+// Wait for enough players (base injects this in Match_StartRound)
+// ---------------------------------- //
+***Rounds_WaitForPlayers***
+***
+WaitForPlayers(C_RequiredPlayersNb);
+
+// Seed the knockout roster once real players + bots have actually joined
+// (Match_StartMatch/StartMap are too early — fake users are requested later).
+// Reseed when: a new match started (G_NewMatch set in Match_StartMatch), OR none
+// of the roster's logins are still present (empty/stale roster — e.g. after a
+// //skip that swapped in new players/bots). If any roster survivor is still here
+// we do NOT reseed, so survivors carry across maps within a multi-map match.
+declare Integer RosterPresent;
+RosterPresent = 0;
+foreach (Player in Players) if (G_PlayersRacing.exists(Player.User.Login)) RosterPresent += 1;
+if (G_NewMatch || RosterPresent == 0) {
+	StartKnockout();
+	G_NewMatch = False;
+}
+***
+
+// ---------------------------------- //
+// Who may spawn this round: survivors only (replaces the old manual spawn loop)
+// ---------------------------------- //
+***Rounds_CanSpawn***
+***
+foreach (Score in Scores) {
+	// CanSpawn is `for Score` (persistent) and the base's Rounds_CanSpawn (which
+	// stacks before us) already created + ASSIGNED it. A `declare ... = initializer`
+	// is ignored when the var already exists, so we must ASSIGN to override.
+	declare CanSpawn for Score = True;
+	CanSpawn = IsRacing(Score.User);
+}
+***
+
+// ---------------------------------- //
+// Start round  (stacks AFTER RoundsBase2's Match_StartRound, which has already
+// spawned survivors via ---Rounds_CanSpawn--- above)
+// ---------------------------------- //
+***Match_StartRound***
+***
+RemoveDisconnected();
+UpdateScoresTableFooter();
+MB_SortScores(CTmMode::ETmScoreSortOrder::TotalPoints);
+UpdatePlayerColors();
+
+// Per-round state (mode-persistent — see Match_StartServer note).
+declare Integer[] RoundFinishTimes for This;
+declare Integer RoundGiveUpsAmount for This;
+declare Integer[] LapPlayersNbDoubled for This;
+declare Integer PrevMostLapsNb for This;
+declare Integer PrevPlayersCount for This;
+
+// Clear per-round variables
+RoundFinishTimes.clear();
+RoundGiveUpsAmount	= 0;
+LapPlayersNbDoubled.clear();
+PrevMostLapsNb		= 0;
+PrevPlayersCount	= -1;
+G_PrevRoundOrderSig	= "";
+G_FirstFinisherSeen	= False;
+
+// Clear scores' race data
+foreach (Score in Scores) {
+	Score.PrevRace = Null;
+	Score.BestRace = Null;
+}
+
+// Reset per-player finished flag (the base spawned them; we only reset state).
+foreach (Player in Players) {
+	declare Boolean HasFinishedTrack for Player;
+	HasFinishedTrack = False;
+}
+
+// Pause between rounds (admin)
+if (S_AdminSetPause) DoPause();
+
+// Set laps amount
+UIManager.UIAll.OverlayHideMultilapInfos = (S_ShowMultilapInfo && S_ForceLapsNb <= 0);
+if (!Map.TMObjective_IsLapRace) NbLaps = 1;
+else if (S_ForceLapsNb > 0) NbLaps = S_ForceLapsNb;
+else NbLaps = 1000;
+
+// Round message
+declare TotalRoundsNb = S_RoundsPerMap;
+if (Map.TMObjective_IsLapRace || S_RoundsPerMap <= 0) TotalRoundsNb = 1;
+declare RoundsMessage = MB_GetRoundCount()^" / "^TotalRoundsNb;
+if (S_RoundsPerMap <= 0 || Map.TMObjective_IsLapRace) RoundsMessage = TL::ToText(MB_GetRoundCount());
+UIManager.UIAll.BigMessage = TL::Compose(_("Round %1"), RoundsMessage);
+
+// Tell overlays which round just started (TotalRounds 0 = unbounded).
+XmlRpc_KORoundStart(MB_GetRoundCount(), S_RoundsPerMap);
+
+UIManager.UIAll.UISequence = CUIConfig::EUISequence::Playing;
+***
+
+// ---------------------------------- //
+// Play loop  (stacks AFTER RoundsBase2's Match_PlayLoop)
+// ---------------------------------- //
+***Match_PlayLoop***
+***
+// Per-round state (mode-persistent — see Match_StartServer note). The ---Laps---
+// block is injected into this same function, so its LapPlayersNbDoubled /
+// RoundGiveUpsAmount accesses resolve against these declarations.
+declare Integer[] RoundFinishTimes for This;
+declare Integer RoundGiveUpsAmount for This;
+declare Integer[] LapPlayersNbDoubled for This;
+declare Integer PrevMostLapsNb for This;
+declare Integer PrevPlayersCount for This;
+
+declare Boolean SawWayPoint;
+SawWayPoint = False;
+foreach (Event in PendingEvents) {
+	declare Processed = Events::Valid(Event);
+
+	// ---------------------------------- //
+	// Waypoint
+	if (Event.Type == CTmModeEvent::EType::WayPoint) {
+		SawWayPoint = True;
+		if (Event.Player.Score != Null) {
+			Event.Player.Score.BestRace = Event.Player.CurRace;
+			MB_SortScores(CTmMode::ETmScoreSortOrder::BestRace_CheckpointsProgress);
+		}
+
+		// ---------------------------------- //
+		// Race finish
+		if (Event.IsEndRace) {
+			TM::EndRace(Event.Player);
+			RoundFinishTimes.add(Event.Player.CurRace.Time);
+
+			declare Boolean HasFinishedTrack for Event.Player;
+			HasFinishedTrack = True;
+
+			// First finisher of the round: arm the finish countdown, announce, and
+			// (Rounds) bank a shield. Setting CutOffTimeLimit drives the on-screen
+			// countdown; the base's Match_PlayLoop stops the round when it expires,
+			// and Match_EndRound DNF-knocks everyone who hadn't finished by then.
+			if (!G_FirstFinisherSeen) {
+				G_FirstFinisherSeen = True;
+				if (S_FinishCountdown > 0) CutOffTimeLimit = Now + S_FinishCountdown * 1000;
+				Notify::SendChat(["$<%1$> wins the round! %2s to finish.", Event.Player.User.Name, TL::ToText(S_FinishCountdown)]);
+				if (S_EnableShields && !Map.TMObjective_IsLapRace) AwardShield(Event.Player);
+			}
+		}
+
+		// ---------------------------------- //
+		// Laps mode
+		if (Map.TMObjective_IsLapRace && Event.IsEndLap && MB_RoundIsRunning()) {
+			if (Event.Player.CurrentNbLaps > PrevMostLapsNb) {
+				PrevMostLapsNb = Event.Player.CurrentNbLaps;
+				Notify::SendChat(["$<%1$> has finished lap %2!", Event.Player.User.Name, TL::ToText(Event.Player.CurrentNbLaps)]);
+			}
+			---Laps---
+			if (GetRacingPlayersAmount() <= 1) MB_StopRound();
+		}
+	}
+	// ---------------------------------- //
+	// GiveUp
+	else if (Event.Type == CTmModeEvent::EType::GiveUp) {
+		if (Event.Player.IsSpawned && IsRacing(Event.Player.User) && Event.Player.CurrentNbLaps < NbLaps) {
+			TM::WaitRace(Event.Player);
+			KnockoutPlayer(Event.Player, False);
+			RoundGiveUpsAmount += 1;
+			Notify::SendChat(["$<%1$> gives up and is knocked out!", Event.Player.User.Name]);
+		}
+		// Avoid players giving up after finish
+		else Event.Player.IsSpawned = False;
+	}
+}
+
+// Broadcast the live running order when a checkpoint/finish changed it.
+if (SawWayPoint) XmlRpc_KORoundOrder();
+
+// Unspawn players joining mid-round
+foreach (Player in Players) {
+	if (Player.IsSpawned && !IsRacing(Player.User)) {
+		TM::WaitRace(Player);
+		Player.IsSpawned = False;
+	}
+}
+
+// Remove disconnected players
+if (PrevPlayersCount != Players.count) {
+	PrevPlayersCount = Players.count;
+	RemoveDisconnected();
+	UpdateScoresTableFooter();
+}
+
+// Stop round when one remains or everyone racing has finished.
+if (GetRacingPlayersAmount() <= 1 || RoundFinishTimes.count == GetRacingPlayersAmount()) MB_StopRound();
+***
+
+// ---------------------------------- //
+// Laps: when a player crosses the finish line (mode-private override block)
+// ---------------------------------- //
+***Laps***
+***
+declare Integer HighestLapsNb;
+declare Integer LowestLapsNb;
+HighestLapsNb = 0;
+LowestLapsNb = 1000;
+
+foreach (Player in Players) {
+	if (IsRacing(Player.User)) {
+		if (Player.CurrentNbLaps < LowestLapsNb) LowestLapsNb = Player.CurrentNbLaps;
+		if (Player.CurrentNbLaps > HighestLapsNb) HighestLapsNb = Player.CurrentNbLaps;
+	}
+}
+
+declare Integer PlayersNbDoubled;
+PlayersNbDoubled = 0;
+
+// No eliminations during the opening practice rounds.
+declare Boolean LapPractice = (G_RoundsPlayed < S_PracticeRounds);
+
+if (HighestLapsNb - LowestLapsNb >= 2 && !LapPractice) {
+	foreach (Player in Players) {
+		if (Player.CurrentNbLaps == LowestLapsNb && IsRacing(Player.User) && GetRacingPlayersAmount() > 1) {
+			KnockoutPlayer(Player, False);
+			Notify::SendChat(["$<%1$> knocked out, doubled by $<%2$>!", Player.User.Name, Event.Player.User.Name]);
+			PlayersNbDoubled += 1;
+		}
+	}
+}
+// Pad so the index always lines up with the finishing player's lap.
+while (LapPlayersNbDoubled.count < Event.Player.CurrentNbLaps) LapPlayersNbDoubled.add(PlayersNbDoubled);
+
+declare Integer LapIndex;
+LapIndex = Event.Player.CurrentNbLaps - 1;
+if (LapIndex >= 0 && !LapPractice && LapPlayersNbDoubled.existskey(LapIndex) && LapPlayersNbDoubled[LapIndex] == 0) {
+	if (RoundGiveUpsAmount > 0) {
+		Notify::SendChat(["Noone is knocked out: %1 player(s) gave up!", TL::ToText(RoundGiveUpsAmount)]);
+		RoundGiveUpsAmount = 0;
+	}
+	else {
+		declare CTmPlayer[] PlayersToCheck;
+		PlayersToCheck.clear();
+		foreach (Player in Players) {
+			if (IsRacing(Player.User) && Player.CurrentNbLaps == LowestLapsNb) PlayersToCheck.add(Player);
+		}
+
+		declare Boolean IsDoubleKO;
+		IsDoubleKO = (S_DoubleKnockUntil > 0 && GetRacingPlayersAmount() > S_DoubleKnockUntil && GetRacingPlayersAmount() >= 3);
+
+		if (IsDoubleKO && PlayersToCheck.count == 2) {
+			while (PlayersToCheck.count > 0 && GetRacingPlayersAmount() > 1) {
+				if (!TryConsumeShield(PlayersToCheck[0])) KnockoutPlayer(PlayersToCheck[0], True);
+				declare Removed = PlayersToCheck.removekey(0);
+			}
+		}
+		else if (PlayersToCheck.count == 1 && GetRacingPlayersAmount() > 1) {
+			if (!TryConsumeShield(PlayersToCheck[0])) KnockoutPlayer(PlayersToCheck[0], True);
+		}
+	}
+}
+***
+
+// ---------------------------------- //
+// Time Attack minigame (mode-private override block, used while waiting/paused)
+// ---------------------------------- //
+***TimeAttack***
+***
+foreach (Event in PendingEvents) {
+	declare Processed = Events::Valid(Event);
+
+	if (Event.Type == CTmModeEvent::EType::WayPoint) {
+		if (Event.IsEndRace) {
+			if (Event.Player.Score != Null && Event.Player.Score.BestRace.Compare(Event.Player.CurRace, CTmResult::ETmRaceResultCriteria::Time) <= 0) {
+				Event.Player.Score.BestRace = Event.Player.CurRace;
+				MB_SortScores(CTmMode::ETmScoreSortOrder::BestRace_Time);
+			}
+			TM::WaitRace(Event.Player);
+		}
+	}
+	else if (Event.Type == CTmModeEvent::EType::GiveUp) {
+		TM::WaitRace(Event.Player);
+	}
+}
+
+// Spawn waiting players for the minigame
+foreach (Player in Players) if (TM::IsWaiting(Player)) TM::StartRace(Player, Now);
+***
+
+// ---------------------------------- //
+// End round  (open plug — RoundsBase2 doesn't fill Match_EndRound)
+// ---------------------------------- //
+***Match_EndRound***
+***
+// Per-round state (mode-persistent — see Match_StartServer note).
+declare Integer[] RoundFinishTimes for This;
+declare Integer RoundGiveUpsAmount for This;
+
+TM::WaitRaceAll();
+CutOffTimeLimit = -1;
+RemoveDisconnected();
+UpdateScoresTableFooter();
+
+// Knock only in Rounds mode
+if (!Map.TMObjective_IsLapRace && !ServerShutdownRequested && !MatchEndRequested) {
+	// Opening practice rounds: no eliminations, just announce.
+	if (G_RoundsPlayed < S_PracticeRounds) {
+		Notify::SendChat(["Practice round %1: no eliminations.", TL::ToText(G_RoundsPlayed + 1)]);
+	}
+	else {
+		declare Integer KnockedCount;
+		KnockedCount = 0;
+
+		// Knock all DNF (shields never save a DNF)
+		foreach (Player in Players) {
+			declare Boolean HasFinishedTrack for Player;
+			if (GetRacingPlayersAmount() > 1 && !HasFinishedTrack && IsRacing(Player.User)) {
+				KnockedCount += 1;
+				KnockoutPlayer(Player, True);
+			}
+		}
+
+		if (KnockedCount == 0) {
+			// Everyone finished, but someone gave up
+			if (RoundGiveUpsAmount > 0) {
+				Notify::SendChat(["Noone is knocked out: %1 player(s) gave up!", TL::ToText(RoundGiveUpsAmount)]);
+			}
+			// Knock slowest player(s) if all finished and noone gave up
+			else if (GetRacingPlayersAmount() > 1 && RoundFinishTimes.count > 0) {
+				declare Integer KnocksRemaining;
+				KnocksRemaining = 1;
+				if (S_DoubleKnockUntil > 0 && GetRacingPlayersAmount() > S_DoubleKnockUntil && GetRacingPlayersAmount() >= 3) KnocksRemaining = 2;
+
+				while (KnocksRemaining > 0 && RoundFinishTimes.count > 0 && GetRacingPlayersAmount() > 1) {
+					declare Integer SlowestTime = RoundFinishTimes[RoundFinishTimes.count - 1];
+
+					declare CTmPlayer SlowestPlayer;
+					SlowestPlayer = Null;
+					foreach (Player in Players) {
+						if (IsRacing(Player.User) && Player.CurRace.Time == SlowestTime) {
+							SlowestPlayer = Player;
+							break;
+						}
+					}
+
+					declare Removed = RoundFinishTimes.remove(SlowestTime);
+					if (SlowestPlayer != Null) {
+						// A shield saves the player; the elimination passes to the
+						// next-slowest finisher instead of knocking them.
+						if (TryConsumeShield(SlowestPlayer)) {
+							// shield consumed; elimination passes to the next-slowest finisher
+						}
+						else {
+							KnockoutPlayer(SlowestPlayer, True);
+							KnocksRemaining -= 1;
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// Count this round towards the practice-round total.
+G_RoundsPlayed += 1;
+
+// (survivor slot highlighting is rendered by the PyPlanet HUD)
+
+// Stop map
+if (GetRacingPlayersAmount() <= 1 || (S_RoundsPerMap > 0 && MB_GetRoundCount() >= S_RoundsPerMap) || Map.TMObjective_IsLapRace) MB_StopMap();
+
+// End sequence
+UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::ForcedVisible;
+UIManager.UIAll.UISequence = CUIConfig::EUISequence::EndRound;
+if (!ServerShutdownRequested && !MatchEndRequested) MB_Sleep(5000);
+UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::Normal;
+UIManager.UIAll.UISequence = CUIConfig::EUISequence::None;
+***
+
+// ---------------------------------- //
+// End map  (open plug — KOMatchStandings + KOSendWinner)
+// ---------------------------------- //
+***Match_EndMap***
+***
+MB_SortScores(CTmMode::ETmScoreSortOrder::TotalPoints);
+XmlRpcTM::SendPlayersScores();
+XmlRpc_KOMatchStandings();
+UpdatePlayerColors();
+RemoveDisconnected();
+
+// v2 has no MB_VictoryMessage var (the podium sequence is automatic). Announce the
+// winner in chat; KOSendWinner drives the PyPlanet winner overlay.
+declare CTmScore WinnerScore;
+WinnerScore = Null;
+if (GetRacingPlayersAmount() == 1) {
+	declare CTmPlayer Winner = TM::GetPlayer(G_PlayersRacing[0]);
+	if (Winner != Null) {
+		WinnerScore = Winner.Score;
+		Notify::SendChat(["$<%1$> wins the match!", Winner.User.Name]);
+	}
+	else Notify::SendChat(["Winner ragequit!"]);
+	XmlRpc_KOSendWinner(Winner);
+}
+
+// The default podium reads Scores::GetPlayerWinner(); if we never set it the engine
+// shows "Draw" over our chat line. Designate the last survivor (fallback: highest
+// survival points) so the podium announces the real winner.
+if (WinnerScore == Null) WinnerScore = Scores::GetBestPlayer(Scores::C_Sort_MatchPoints, Scores::Order_Descending());
+if (WinnerScore != Null) Scores::SetPlayerWinner(WinnerScore);
+***
+
+// ---------------------------------- //
+// End server
+// ---------------------------------- //
+***Match_EndServer***
+***
+Layers::Detach("Custom");
+Layers::Destroy("Custom");
+
+XmlRpc::UnregisterCallback("KOPlayerAdded");
+XmlRpc::UnregisterCallback("KOPlayerRemoved");
+XmlRpc::UnregisterCallback("KOSendWinner");
+XmlRpc::UnregisterCallback("KOMatchStandings");
+XmlRpc::UnregisterCallback("KORoundOrder");
+XmlRpc::UnregisterCallback("KORoundStart");
+XmlRpc::UnregisterCallback("KOShieldAwarded");
+XmlRpc::UnregisterCallback("KOShieldUsed");
+***
+
+// ---------------------------------- //
+// Functions
+// ---------------------------------- //
+
+// ---------------------------------- //
+// XmlRpc — ports verbatim from the old mode (pure XmlRpc:: + string building).
+// ---------------------------------- //
+
+Void XmlRpc_KOPlayerAdded(CTmPlayer _Player) {
+	if (!XmlRpcTM::CallbackIsAllowed("KOPlayerAdded")) return;
+	declare PlayerLogin = "Null";
+	if (_Player != Null) PlayerLogin = _Player.User.Login;
+	declare Data = [PlayerLogin];
+	XmlRpcTM::SendCallbackArray("KOPlayerAdded", Data);
+}
+
+Void XmlRpc_KOPlayerRemoved(CTmPlayer _Player) {
+	if (!XmlRpcTM::CallbackIsAllowed("KOPlayerRemoved")) return;
+	declare PlayerLogin = "Null";
+	if (_Player != Null) PlayerLogin = _Player.User.Login;
+	declare Data = [PlayerLogin];
+	XmlRpcTM::SendCallbackArray("KOPlayerRemoved", Data);
+}
+
+Void XmlRpc_KOSendWinner(CTmPlayer _Player) {
+	if (!XmlRpcTM::CallbackIsAllowed("KOSendWinner")) return;
+	declare PlayerLogin = "Null";
+	if (_Player != Null) PlayerLogin = _Player.User.Login;
+	declare Data = [PlayerLogin];
+	XmlRpcTM::SendCallbackArray("KOSendWinner", Data);
+}
+
+/** Map-end standings: ["Login:Points", ...], Points = survival score. */
+Void XmlRpc_KOMatchStandings() {
+	if (!XmlRpcTM::CallbackIsAllowed("KOMatchStandings")) return;
+	declare Text[] Data;
+	foreach (Score in Scores) {
+		if (Score.User != Null) Data.add(Score.User.Login ^ ":" ^ Score.Points);
+	}
+	XmlRpcTM::SendCallbackArray("KOMatchStandings", Data);
+}
+
+/** Live running order, throttled to fire only when it actually changes. */
+Void XmlRpc_KORoundOrder() {
+	if (!XmlRpcTM::CallbackIsAllowed("KORoundOrder")) return;
+
+	declare Text[] Data;
+	declare Text Sig = "";
+	declare Integer Rank = 0;
+	foreach (Score in Scores) {
+		if (Score.User != Null && G_PlayersRacing.exists(Score.User.Login)) {
+			Rank += 1;
+			declare Integer Cps = 0;
+			declare Integer RaceTime = -1;
+			if (Score.BestRace != Null) {
+				Cps = Score.BestRace.Checkpoints.count;
+				RaceTime = Score.BestRace.Time;
+			}
+			declare Integer Finished = 0;
+			declare CTmPlayer KOPlayer = TM::GetPlayer(Score.User.Login);
+			if (KOPlayer != Null) {
+				declare Boolean HasFinishedTrack for KOPlayer;
+				if (HasFinishedTrack) Finished = 1;
+			}
+			Data.add(Score.User.Login ^ ":" ^ Rank ^ ":" ^ Cps ^ ":" ^ RaceTime ^ ":" ^ Finished);
+			Sig ^= Score.User.Login ^ Finished ^ ";";
+		}
+	}
+
+	// Skip the send when nothing relevant changed since last time.
+	if (Sig == G_PrevRoundOrderSig) return;
+	G_PrevRoundOrderSig = Sig;
+	XmlRpcTM::SendCallbackArray("KORoundOrder", Data);
+}
+
+Void XmlRpc_KORoundStart(Integer _Round, Integer _Total) {
+	if (!XmlRpcTM::CallbackIsAllowed("KORoundStart")) return;
+	declare Data = [_Round ^ ":" ^ _Total];
+	XmlRpcTM::SendCallbackArray("KORoundStart", Data);
+}
+
+Void XmlRpc_KOShieldAwarded(CTmPlayer _Player) {
+	if (!XmlRpcTM::CallbackIsAllowed("KOShieldAwarded")) return;
+	declare PlayerLogin = "Null";
+	if (_Player != Null) PlayerLogin = _Player.User.Login;
+	declare Data = [PlayerLogin];
+	XmlRpcTM::SendCallbackArray("KOShieldAwarded", Data);
+}
+
+Void XmlRpc_KOShieldUsed(CTmPlayer _Player) {
+	if (!XmlRpcTM::CallbackIsAllowed("KOShieldUsed")) return;
+	declare PlayerLogin = "Null";
+	if (_Player != Null) PlayerLogin = _Player.User.Login;
+	declare Data = [PlayerLogin];
+	XmlRpcTM::SendCallbackArray("KOShieldUsed", Data);
+}
+
+// ---------------------------------- //
+// Knockout
+// ---------------------------------- //
+
+/// Start a new Knockout (seed the racing set + shields).
+Void StartKnockout() {
+	G_PlayersRacing.clear();
+	G_RoundsPlayed = 0;
+	// Logins pre-granted a shield this match (e.g. the BOTD fastest-practice time).
+	declare Text[] PreShieldLogins = TL::Split(", ", S_PreShieldLogins);
+	foreach (Player in Players) {
+		G_PlayersRacing.add(Player.User.Login);
+		// Fresh knockout: zero the survival score (match-points bucket drives the
+		// scoreboard Points column — see Match_StartServer SaveInScore).
+		if (Player.Score != Null) Scores::SetPlayerMatchPoints(Player.Score, 0);
+		declare Integer ShieldTokens for Player;
+		ShieldTokens = 0;
+		if (S_EnableShields && PreShieldLogins.exists(Player.User.Login)) {
+			ShieldTokens = 1;
+			XmlRpc_KOShieldAwarded(Player);
+		}
+		XmlRpc_KOPlayerAdded(Player);
+	}
+}
+
+/** Give a player a one-time shield (capped at one), if shields are enabled. */
+Void AwardShield(CTmPlayer _Player) {
+	if (!S_EnableShields || _Player == Null) return;
+	declare Integer ShieldTokens for _Player;
+	if (ShieldTokens < 1) {
+		ShieldTokens = 1;
+		XmlRpc_KOShieldAwarded(_Player);
+		Notify::SendChat(["$<%1$> earns a shield for winning the round!", _Player.User.Name]);
+	}
+}
+
+/** Spend a player's shield to save them from a knockout, if they have one. */
+Boolean TryConsumeShield(CTmPlayer _Player) {
+	if (!S_EnableShields || _Player == Null) return False;
+	declare Integer ShieldTokens for _Player;
+	if (ShieldTokens > 0) {
+		ShieldTokens -= 1;
+		XmlRpc_KOShieldUsed(_Player);
+		Notify::SendChat(["$<%1$> uses a shield and survives!", _Player.User.Name]);
+		return True;
+	}
+	return False;
+}
+
+/// Whether the player is still racing.
+Boolean IsRacing(CUser _User) { return (_User != Null && G_PlayersRacing.exists(_User.Login)); }
+
+/// Amount of racing players.
+Integer GetRacingPlayersAmount() { return G_PlayersRacing.count; }
+
+/// Update the scores table footer text.
+Void UpdateScoresTableFooter() {
+	declare TotalRoundsNb = S_RoundsPerMap;
+	if (Map.TMObjective_IsLapRace || S_RoundsPerMap <= 0) TotalRoundsNb = 1;
+
+	declare RoundsMessage = MB_GetRoundCount()^" / "^TotalRoundsNb;
+	if (TotalRoundsNb <= 1) RoundsMessage = TL::ToText(MB_GetRoundCount());
+
+	declare DoubleKOMessage = "";
+	if (S_DoubleKnockUntil >= 3 && GetRacingPlayersAmount() > S_DoubleKnockUntil) DoubleKOMessage ^= TL::ToText(S_DoubleKnockUntil);
+	else DoubleKOMessage = _("|FxMotionBlur|Off");
+
+	if (Hud != Null && Hud.ScoresTable != Null) Hud.ScoresTable.SetFooterText(TL::Compose("%1 %2	%3"^GetRacingPlayersAmount()^"	DoubleKO: %4", _("Round"), RoundsMessage, _("Remaining players: "), DoubleKOMessage));
+
+	declare SpectatorsAmount = Spectators.count + Players.count - GetRacingPlayersAmount();
+	ModeStatusMessage = TL::Compose(C_ModeStatusMessage, TL::ToText(GetRacingPlayersAmount()), TL::ToText(SpectatorsAmount));
+}
+
+/** Knock a player out of the game (survival points to the others). */
+Void KnockoutPlayer(CTmPlayer _Player, Boolean _UseMessage) {
+	if (_Player != Null && IsRacing(_Player.User)) {
+		declare Removed = G_PlayersRacing.remove(_Player.User.Login);
+
+		MB_SortScores(CTmMode::ETmScoreSortOrder::BestRace_CheckpointsProgress);
+		UpdateScoresTableFooter();
+
+		XmlRpc_KOPlayerRemoved(_Player);
+		if (_UseMessage) Notify::SendChat(["$<%1$> knocked out!", _Player.User.Name]);
+
+		// Survival point for every remaining racer. Go through the Scores library
+		// (not a raw Score.Points write) so its internal match-points counter tracks
+		// the value — otherwise the library's lifecycle Clear/AffectRoundToMap resets
+		// Score.Points back to its own (zero) counter around the podium/next map.
+		foreach (Score in Scores) if (G_PlayersRacing.exists(Score.User.Login)) Scores::AddPlayerMatchPoints(Score, 1);
+	}
+	else return;
+}
+
+/// Remove all disconnected players from the racing array.
+Void RemoveDisconnected() {
+	declare Text[] ConnectedLogins;
+	ConnectedLogins.clear();
+	foreach (Player in Players) ConnectedLogins.add(Player.User.Login);
+
+	declare Text[] AliveLogins;
+	AliveLogins.clear();
+	foreach (Login in G_PlayersRacing) AliveLogins.add(Login);
+
+	foreach (Login in AliveLogins)
+		if (!ConnectedLogins.exists(Login)) {
+			declare Removed = G_PlayersRacing.remove(Login);
+		}
+}
+
+// ---------------------------------- //
+// Other
+// ---------------------------------- //
+
+/// Update player colors.
+Void UpdatePlayerColors() {
+	// Player/slot colors are owned by the PyPlanet HUD now (legacy ST2:: is gone
+	// in the RoundsBase2 generation).
+}
+
+/// Convert a time integer to text.
+Text TimeToText(Integer _Time) {
+	declare Time = TL::TimeToText(_Time, True);
+	if (_Time >= 0) Time ^= _Time%10;
+	return Time;
+}
+
+/** Wait for enough players to launch a round (runs the TimeAttack minigame). */
+Void WaitForPlayers(Integer _MinimumNbPlayers) {
+	declare HasWaited = False;
+	declare WasHold = False;
+
+	if (S_AdminHoldStart) {
+		UIManager.UIAll.BigMessage = "";
+		UIManager.UIAll.StatusMessage = _("Waiting for start confirmation by admin");
+	}
+
+	while (!ServerShutdownRequested && !MatchEndRequested && (Players.count < _MinimumNbPlayers || S_AdminHoldStart)) {
+		UIManager.UIAll.UISequence = CUIConfig::EUISequence::None;
+		UIManager.UIAll.BigMessage = _("Waiting for players...");
+		MB_Yield();
+		HasWaited = True;
+		WasHold = S_AdminHoldStart;
+		---TimeAttack---
+	}
+
+	if (HasWaited) {
+		TM::WaitRaceAll();
+		UIManager.UIAll.BigMessage = _("A new player joins the game.");
+		if (!ServerShutdownRequested && !MatchEndRequested) MB_Sleep(5000);
+	}
+
+	if (WasHold) UIManager.UIAll.BigMessage = _("Competition is starting!");
+
+	UIManager.UIAll.StatusMessage = "";
+	UIManager.UIAll.BigMessage = "";
+}
+
+/// Set mode pause (FFA Time Attack minigame).
+Void DoPause() {
+	UIManager.UIAll.UISequence = CUIConfig::EUISequence::None;
+	UIManager.UIAll.BigMessage = TL::Compose("$f90%1", _("Pause"));
+	UIManager.UIAll.StatusMessage = _("Competition has been paused for a while");
+	UpdatePlayerColors();
+
+	declare HasWaited = False;
+
+	while (!ServerShutdownRequested && !MatchEndRequested && S_AdminSetPause) {
+		MB_Yield();
+		HasWaited = True;
+		---TimeAttack---
+	}
+
+	if (HasWaited) {
+		TM::WaitRaceAll();
+		UIManager.UIAll.StatusMessage = "";
+		UIManager.UIAll.BigMessage = _("Competition resumed!");
+		if (!ServerShutdownRequested && !MatchEndRequested) MB_Sleep(5000);
+	}
+
+	UpdatePlayerColors();
+	MB_SortScores(CTmMode::ETmScoreSortOrder::TotalPoints);
+	UIManager.UIAll.BigMessage = "";
+	UIManager.UIAll.StatusMessage = "";
+}
+
+/** Time left to finish the round after the first player. Called by RoundsBase2's
+ *	Match_StartRound when S_UseAlternateRules is on. */
+Integer GetFinishTimeout() {
+	declare FinishTimeout = 0;
+
+	if (S_FinishTimeout >= 0) {
+		FinishTimeout = S_FinishTimeout * 1000;
+	} else {
+		FinishTimeout = 5000;
+		if (Map.TMObjective_IsLapRace && NbLaps > 0 && Map.TMObjective_NbLaps > 0) {
+			FinishTimeout += ((Map.TMObjective_AuthorTime / Map.TMObjective_NbLaps) * NbLaps) / 6;
+		} else {
+			FinishTimeout += Map.TMObjective_AuthorTime / 6;
+		}
+	}
+
+	if (S_UseAlternateRules) {
+		if (Map.TMObjective_IsLapRace && NbLaps > 0 && Map.TMObjective_NbLaps > 0) {
+			return G_RoundStartTime + ((Map.TMObjective_AuthorTime / Map.TMObjective_NbLaps) * NbLaps) + FinishTimeout;
+		} else {
+			return G_RoundStartTime + Map.TMObjective_AuthorTime + FinishTimeout;
+		}
+	} else {
+		return Now + FinishTimeout;
+	}
+
+	return Now + 15000;
+}
+
+// SetScoresTableLayout() removed: the legacy ST2:: scores-table layout/column API
+// is gone in the RoundsBase2 generation (the table is a compiled Hud module). The
+// Score points column and overall layout come from the stock Hud module.
+
+// ---------------------------------- //
+// Custom layer
+// ---------------------------------- //
+
+Boolean RequestLayerFromXml(Text _XmlPath) {
+	if (G_UI_RequestId != NullId && Http.Requests.existskey(G_UI_RequestId)) Http.Destroy(Http.Requests[G_UI_RequestId]);
+	G_UI_RequestId = NullId;
+	G_UI_RequestEndTime = -1;
+	if (!Http.IsValidUrl(_XmlPath)) return False;
+
+	declare Req <=> Http.CreateGet(_XmlPath);
+	if (Req == Null) return False;
+	G_UI_RequestId = Req.Id;
+	G_UI_RequestEndTime = Now + C_UI_RequestTimeout;
+	return True;
+}
+
+Boolean WaitLayerFromXml() {
+	if (Now >= G_UI_RequestEndTime) return False;
+	if (G_UI_RequestId == NullId) return False;
+	if (!Http.Requests.existskey(G_UI_RequestId)) return False;
+	if (Http.Requests[G_UI_RequestId].IsCompleted) return False;
+	return True;
+}
+
+Boolean SetLayerFromXml() {
+	if (!Http.Requests.existskey(G_UI_RequestId)) return False;
+
+	declare Req <=> Http.Requests[G_UI_RequestId];
+	if (!Req.IsCompleted || Req.StatusCode != 200) return False;
+
+	Layers::Update("Custom", Req.Result);
+
+	Http.Destroy(Req);
+	G_UI_RequestId = NullId;
+	G_UI_RequestEndTime = -1;
+	return True;
+}
+
+Void SetCustomLayerFromXml(Text _Path) {
+	if (_Path == "") return;
+	declare Loaded = RequestLayerFromXml(_Path);
+	if (Loaded) {
+		while (WaitLayerFromXml()) yield;
+		Loaded = SetLayerFromXml();
+	}
+}

@@ -1,0 +1,59 @@
+// -------------------------------------- //
+//  Notify — minimal message helper        //
+//  Crew Knockout title pack               //
+// -------------------------------------- //
+//
+// Self-owned replacement for the parts of domino54/Translations the Knockout
+// mode actually used: composing a message from a ``[format, args...]`` array and
+// broadcasting it to chat. No translation tables, no SentenceBank — the mode's
+// text needs are small and English-only.
+//
+// The call shape is preserved from the old mode so the call sites change only
+// their namespace prefix (Translations::SendChat -> Notify::SendChat).
+//
+// Libraries can reference the mode's global symbols (UIManager, AllPlayers) the
+// same way domino54/Translations did, so SendChat works from here.
+
+#Include "TextLib" as TL
+
+// Prefix prepended to every chat line. $z resets formatting, $s removes shadow.
+#Const C_Notify_ChatPrefix "$z$s$fff"
+
+// ---------------------------------- //
+/** Compose a message from a ``[format, args...]`` array using TextLib.
+ *
+ *	@param	_Parts	[format, arg1, arg2, arg3] — only the format is required.
+ *	@return			The composed text.
+ */
+Text Compose(Text[] _Parts) {
+	if (_Parts.count <= 0) return "";
+	if (_Parts.count == 1) return TL::Compose(_Parts[0]);
+	if (_Parts.count == 2) return TL::Compose(_Parts[0], _Parts[1]);
+	if (_Parts.count == 3) return TL::Compose(_Parts[0], _Parts[1], _Parts[2]);
+	return TL::Compose(_Parts[0], _Parts[1], _Parts[2], _Parts[3]);
+}
+
+// ---------------------------------- //
+/** Broadcast a composed message to every player's chat.
+ *
+ *	@param	_Parts	[format, args...] as for Compose.
+ */
+Void SendChat(Text[] _Parts) {
+	declare Message = C_Notify_ChatPrefix ^ Compose(_Parts);
+	foreach (Player in AllPlayers) {
+		declare UI <=> UIManager.GetUI(Player);
+		if (UI != Null) UI.SendChat(Message);
+	}
+}
+
+// ---------------------------------- //
+/** Send a composed message to a single player's chat.
+ *
+ *	@param	_Player	The recipient.
+ *	@param	_Parts	[format, args...] as for Compose.
+ */
+Void SendChatTo(CPlayer _Player, Text[] _Parts) {
+	if (_Player == Null) return;
+	declare UI <=> UIManager.GetUI(_Player);
+	if (UI != Null) UI.SendChat(C_Notify_ChatPrefix ^ Compose(_Parts));
+}

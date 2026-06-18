@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+
+# Stock Nadeo ManiaScript files that ship with the server package
+# (everything under Modes/ except our authored Knockout mode + crew libs)
+Modes/Trackmania/Base/ModeBase2.Script.txt
+Modes/Trackmania/Base/ModeBase.Script.txt
+Modes/Trackmania/Base/ModeTrackmania.Script.txt
+Modes/Trackmania/Base/RoundsBase2.Script.txt
+Modes/Trackmania/Cup.Script.txt
+Modes/Trackmania/Laps.Script.txt
+Modes/Trackmania/RoundsBase.Script.txt
+Modes/Trackmania/Rounds.Script.txt
+Modes/Trackmania/TimeAttack.Script.txt

@@ -1,0 +1,26 @@
+# PyPlanet config for Knockout server
+# Place this at the root of your PyPlanet installation
+
+settings:
+  pyplanet:
+    # Server connection
+    HOST: '127.0.0.1'
+    PORT: 2350
+    USER: 'SuperAdmin'
+    PASSWORD: 'your_password'
+
+    # Apps to load
+    APPS:
+      - 'core.maniaplanet'
+      - 'core.admin'
+      - 'core.chat'
+      - 'core.players'
+      - 'contrib.jukebox'
+      - 'contrib.admin'
+      - 'contrib.dedimania'
+      - 'contrib.karma'
+      - 'contrib.mapinfo'
+      - 'contrib.local_records'
+      - 'contrib.live_rankings'
+      - 'contrib.ads'
+      - 'apps.knockout'  # <-- Knockout app

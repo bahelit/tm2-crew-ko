@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tm2-crew-knockout"
+version = "0.1.0"
+description = "Trackmania 2 Stadium Knockout game mode + PyPlanet controller app (Bowl of the Evening)"
+requires-python = ">=3.8"
+# pyplanet is the runtime host; it is provided by the server install, not pinned here.
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.setuptools]
+packages = ["apps.knockout"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]

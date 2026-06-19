@@ -32,8 +32,15 @@ class BotnCountdown(TemplateView):
 		data['header'] = self.header
 		return data
 
-	async def start(self, seconds, header='KNOCKOUT IN'):
-		"""(Re)arm and display the countdown for ``seconds`` seconds under ``header``."""
+	async def start(self, seconds, header='KNOCKOUT IN', player=None):
+		"""(Re)arm and display the countdown for ``seconds`` seconds under ``header``.
+
+		With ``player`` set, send only to that player (used to catch a late joiner up
+		with their remaining time without resetting everyone else's running clock);
+		otherwise display to everyone currently connected."""
 		self.seconds = max(1, int(seconds or 0))
 		self.header = header or 'KNOCKOUT IN'
-		await self.display()
+		if player is not None:
+			await self.display(player=player)
+		else:
+			await self.display()

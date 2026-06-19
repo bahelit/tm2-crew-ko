@@ -90,15 +90,42 @@ class BotnController:
 		self.best = {}             # login -> best practice time (ms)
 		self.cutoff_ts = None      # epoch seconds of the cutoff
 		self._task = None          # asyncio waiter for the cutoff
+		# Countdown-overlay state, so a player who connects mid-countdown can be sent
+		# the overlay with their correct remaining time (the BOTN auto-starts at boot
+		# with nobody connected, so the initial display() reaches no one).
+		self._overlay_active = False
+		self._overlay_ends = None  # epoch seconds the current countdown ends at
+		self._overlay_header = 'KNOCKOUT IN'
 
 	async def on_start(self):
 		# Always listen for finishes; the handler ignores them unless we are in the
 		# practice phase, so this is cheap when no BOTN is running.
 		from pyplanet.apps.core.trackmania import callbacks as tm_signals
+		from pyplanet.apps.core.maniaplanet import callbacks as mp_signals
 		self.app.context.signals.listen(tm_signals.finish, self.on_practice_finish)
+		# Catch players who connect while a countdown is on screen (notably the BOTN
+		# auto-started at boot, where the first display() reaches nobody).
+		self.app.context.signals.listen(mp_signals.player.player_connect, self.on_player_connect)
 		# Re-arm after a PyPlanet restart if a BOTN cup is still active and we are
 		# back in (or never left) the TimeAttack practice phase.
 		await self._maybe_resume()
+
+	async def on_player_connect(self, player=None, **kwargs):
+		"""Send the live countdown to a player who just connected, with their correct
+		remaining time, so late joiners (and everyone after a boot-time auto-start) see
+		it. Existing players are not re-sent, so their running clocks are undisturbed."""
+		if not self._overlay_active or self._overlay_ends is None or player is None:
+			return
+		remaining = int(self._overlay_ends - time.time())
+		if remaining <= 0:
+			return
+		cd = getattr(self.app, 'botn_countdown', None)
+		if cd is None:
+			return
+		try:
+			await cd.start(remaining, self._overlay_header, player=player)
+		except Exception:
+			logger.exception('Knockout: BOTN countdown re-send on connect failed')
 
 	async def _maybe_resume(self):
 		cup = getattr(self.app.cup, 'active_cup', None)
@@ -286,12 +313,19 @@ class BotnController:
 		cd = getattr(self.app, 'botn_countdown', None)
 		if cd is None or total <= 0:
 			return
+		# Track the target end time + header so on_player_connect can catch up a late
+		# joiner with the right remaining time.
+		self._overlay_active = True
+		self._overlay_ends = time.time() + total
+		self._overlay_header = header
 		try:
 			await cd.start(total, header)
 		except Exception:
 			logger.exception('Knockout: BOTN countdown overlay failed to show')
 
 	async def _hide_countdown_overlay(self):
+		self._overlay_active = False
+		self._overlay_ends = None
 		cd = getattr(self.app, 'botn_countdown', None)
 		if cd is None:
 			return

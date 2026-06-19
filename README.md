@@ -1,18 +1,15 @@
 # tm2-crew-ko — Knockout + Bowl of the Night
 
-A nightly, livestreamed **Trackmania 2 Stadium** event system:
+A **Trackmania 2 Stadium** event system:
 
 - A **Knockout** game mode (ManiaScript) — slowest racer(s) eliminated each round
   until one winner remains.
-- A **PyPlanet** controller app (`apps/knockout/`) that runs cups, the **Bowl of
-  the Night (BOTN)** clock, broadcast overlays, an always-on match HUD, season
-  leaderboards, planet payouts, and VOD highlight markers.
-
-The full design is in [`KNOCKOUT_REBUILD_SPEC.md`](KNOCKOUT_REBUILD_SPEC.md).
+- A **PyPlanet** controller app (`apps/knockout/`) that runs cups, a daily **Bowl
+  of the Night (BOTN)**, an always-on match HUD, season leaderboards, and planet
+  payouts.
 
 The mode and the app talk over a frozen callback contract (`KO*` ModeScript
-callbacks); it is defined and parsed in one place: `apps/knockout/callbacks.py`
-(spec §3.1).
+callbacks), defined and parsed in one place: `apps/knockout/callbacks.py`.
 
 ---
 
@@ -20,26 +17,25 @@ callbacks); it is defined and parsed in one place: `apps/knockout/callbacks.py`
 
 ```
 apps/knockout/
-  __init__.py            # thin AppConfig: settings + controller wiring
+  __init__.py            # AppConfig: settings + controller wiring + startup mode
   callbacks.py           # KO* callback contract: registrations + pure parsers
   score_modes.py         # pure: points-by-placement tables
   hud_format.py          # pure: HUD time/gap/label formatting
   botn.py                # Bowl of the Night controller + pure time helpers
+  loader_fix.py          # self-healing jinja loader (late-loaded app templates)
   season.py              # pure season aggregation + SeasonController
-  markers.py             # pure VOD-marker formatting + MarkersController
   config.py              # cup presets JSON loader
   export.py              # CSV + Discord-markdown export
   payouts.py             # planet payouts by placement
   controllers/           # PyPlanet-heavy controllers
     cup.py  capture.py  live.py  results.py  commands.py
   models/                # MatchInfo, PlayerScore, CupInfo, CupMatch (peewee)
-  views/                 # hud / ticker / lower_third / widget / results / ...
+  views/                 # on-screen UI: HUD, widget, countdowns, results, ...
     templates/           # Manialink XML
 Modes/Trackmania/
   Knockout.Script.txt    # the game mode (#Extends RoundsBase2)
-  Libs/crew/Notify.Script.txt   # our own minimal message lib (no domino54)
+  Libs/crew/Notify.Script.txt   # our own minimal message lib
   Base/                  # RoundsBase2 + chain, shipped for review (server-provided)
-tests/                   # pure-core pytest suite (no PyPlanet needed)
 ```
 
 Pure, testable modules stay at the package top level; PyPlanet-coupled
@@ -51,14 +47,16 @@ controllers live under `controllers/`.
 
 ### PyPlanet app
 1. Copy `apps/knockout/` into your PyPlanet project's `apps/` directory.
-2. Add it to `APPS` in your PyPlanet `config.yaml` (see
-   `pyplanet_config_example.yaml`):
-   ```yaml
-   APPS:
-     default:
-       - 'apps.knockout'
+2. Add it to your `APPS` list (Python settings `settings/apps.py`, or YAML):
+   ```python
+   APPS = {
+       'default': [
+           # ... core + contrib apps ...
+           'apps.knockout',
+       ]
+   }
    ```
-3. Restart PyPlanet. The four `knockout_*` tables are auto-created on first start.
+3. Restart PyPlanet. The `knockout_*` tables are auto-created on first start.
 
 ### Game mode
 1. Copy `Modes/Trackmania/Knockout.Script.txt` and `Modes/Trackmania/Libs/crew/`
@@ -70,14 +68,71 @@ controllers live under `controllers/`.
    the mode's callbacks are built for that.
 
 > The `Modes/Trackmania/Base/` scripts (`RoundsBase2`, `ModeTrackmania`,
-> `ModeBase2`, `ModeBase`) are shipped only for review. They are provided by the
+> `ModeBase2`, `ModeBase`) are shipped only for review — they are provided by the
 > server install; the title pack does not redistribute the stock `Libs/Nadeo/*`.
 
-> ⚠️ **The ManiaScript mode is a re-based draft and needs live-server
-> validation** before a real event — it could not be compiled here. See the
-> "VALIDATE ON A LIVE SERVER" checklist in the header of `Knockout.Script.txt`
-> (plug stacking, `Match_LogVersions`, the `ST2::` scores table, survival-points
-> field, round-stop, callbacks under legacy-off).
+---
+
+## Startup &amp; modes
+
+On boot the app puts the server into a **resting state** chosen by the
+`startup_mode` configuration. Nothing else needs to be running for this to work —
+set it once and the server comes up ready to play.
+
+| Mode | What the server does on boot |
+|---|---|
+| `none` *(default)* | Leaves the server's own configured mode untouched. |
+| `knockout` | Loads **TimeAttack** and idles, waiting for an admin `//cup on`. |
+| `botn` | Auto-starts a **Bowl of the Night** (TimeAttack practice → knockout). |
+
+### Where to set it
+
+`startup_mode` can be set two ways. A `KNOCKOUT_STARTUP_MODE` key in the PyPlanet
+settings file **wins** over the live `startup_mode` setting, so the boot mode can
+be pinned in config for launch-and-play:
+
+- **Settings file** (recommended for launch-and-play):
+  - Python settings (`settings/base.py` or `settings/local.py`):
+    ```python
+    KNOCKOUT_STARTUP_MODE = 'botn'   # 'knockout' | 'botn' | 'none'
+    ```
+  - YAML settings (`settings/base.yaml`):
+    ```yaml
+    KNOCKOUT_STARTUP_MODE: botn
+    ```
+- **Live setting** (`//settings`): set `startup_mode` to `none` / `knockout` /
+  `botn`. Used only when the file key is absent. Read once at boot, so it takes
+  effect on the next controller start.
+
+### Knockout-cup servers (`startup_mode = knockout`)
+
+The server boots into TimeAttack and waits. An admin runs `//cup on` (optionally
+`//cup setup <preset>` to push the knockout mode + settings), the cup is played,
+and `//cup off` stops the cup and **returns the server to TimeAttack** between
+cups. An active cup survives a controller restart and resumes automatically.
+
+### Bowl of the Night (`startup_mode = botn`)
+
+A daily one-map event recorded as a one-map cup (`cup_key = botn`):
+
+1. The server boots (or `//botn on`) into **TimeAttack practice** on the day's
+   map, and arms a Python cutoff clock for `botn_cutoff_time`.
+2. A right-side overlay counts down the whole time — **"PRACTICE ENDS IN"** to the
+   cutoff, then **"KNOCKOUT IN"** through the handoff. It is also re-sent to
+   players who connect mid-countdown, with their correct remaining time.
+3. At the cutoff the fastest practice time is recorded; if `botn_fastest_shield`
+   is on, that player gets a one-time shield (save) in the knockout.
+4. After the `botn_countdown_seconds` handoff window the app switches the **same
+   map** to Knockout and plays to a winner — which records into the `botn` cup and
+   auto-completes.
+
+**Restart behavior.** On a controller restart, a BOTN still genuinely in its
+**practice** phase is resumed (cutoff re-armed). Any other leftover — a knockout
+that was handed off, or some other active cup — is replaced with a fresh BOTN, so
+a `startup_mode = botn` server always comes back up in practice rather than a
+stale knockout.
+
+Because ManiaScript has no wall clock, all BOTN timing lives in Python.
 
 ---
 
@@ -90,14 +145,13 @@ controllers live under `controllers/`.
 | `//cup off` | Stop the active cup (returns the server to TimeAttack). |
 | `//cup setup <preset>` | Push a preset's mode script + settings. |
 | `//cup mapcount <n>` / `//cup edition <n>` / `//cup scoremode <id>` | Tune the active cup. |
-| `//cup edit <index>` | Toggle whether a map counts. |
+| `//cup edit <index>` | Toggle whether a map counts towards the cup. |
 | `//cup export` | Write CSV + Discord-markdown standings. |
-| `//cup pay [payout]` | Pay planets (needs `cup_payouts_enabled`). |
+| `//cup pay [payout]` | Pay planets to the standings (needs `cup_payouts_enabled`). |
 | `//botn on [HH:MM]` | Start a Bowl of the Night (optional cutoff override). |
-| `//botn off` / `//botn start` | Cancel / skip-to-knockout. |
-| `//botn countdown <seconds>` | Set the practice→knockout countdown. |
+| `//botn off` / `//botn start` | Cancel / skip straight to the knockout. |
+| `//botn countdown <seconds>` | Set the practice→knockout handoff countdown. |
 | `//ko hud` | Print HUD live state + force a test render (diagnostic). |
-| `//ko streamstart` / `//ko mark <note>` | VOD marker clock / manual marker. |
 
 ### Public (`/`)
 `/cup status` · `/cup results` · `/cup matches` · `/cup season [key]` ·
@@ -105,92 +159,63 @@ controllers live under `controllers/`.
 
 ---
 
-## Settings (`//settings`)
+## Configuration
 
-Key settings — see `apps/knockout/__init__.py` for the full list and defaults:
+All options below are PyPlanet settings, tunable live with `//settings` (stored in
+the database). The one exception is the boot mode, which can also be pinned in the
+settings file via `KNOCKOUT_STARTUP_MODE` (see [Startup &amp; modes](#startup--modes)).
 
-- `startup_mode` (`none`) — what the server boots into: `none` (leave the
-  server's own mode alone), `knockout` (idle in TimeAttack until `//cup on`), or
-  `botn` (auto-start a Bowl of the Night). A session resumed from a restart is
-  never overridden.
-- `show_match_hud` (on), `show_overlays` (off), `show_cup_widget` (off),
-  `show_season_points` (on) — display toggles; take effect live, no reload.
-- `notifications`, `show_join`, `show_knockout`, `show_winner` — chat notices.
-- `save_to_season` — off excludes new cups from the season leaderboard.
-- `botn_cutoff_time` (`17:00`), `botn_countdown_seconds` (`900`),
-  `botn_fastest_shield` (on) — Bowl of the Night.
-- `cup_presets_path`, `cup_default_score_mode`, `cup_payouts_enabled`,
-  `cup_export_path` — cup config.
-- `vod_markers_enabled`, `vod_markers_path` — VOD highlight markers.
+### Startup
+| Setting | Default | Description |
+|---|---|---|
+| `startup_mode` | `none` | Boot resting state: `none` / `knockout` / `botn`. Overridden by the `KNOCKOUT_STARTUP_MODE` file key. |
 
-Score modes: `default` (10,8,6,5,4,3,2,1), `f1`, `flat`, `survival`.
-Cup presets are a JSON file (`names` / `presets` / `payouts`); see
-`presets_example.json`.
+### Bowl of the Night
+| Setting | Default | Description |
+|---|---|---|
+| `botn_cutoff_time` | `17:00` | Local `HH:MM` when practice ends and the knockout begins. |
+| `botn_countdown_seconds` | `900` | Seconds between practice closing and the knockout starting (15 min). Settable live with `//botn countdown <seconds>`. |
+| `botn_fastest_shield` | on | Grant the fastest practice time a one-time shield in the knockout. |
 
----
+### Cups
+| Setting | Default | Description |
+|---|---|---|
+| `cup_default_score_mode` | `default` | Points table for new cups (see Score modes). |
+| `cup_presets_path` | *(blank)* | Path to the cup presets JSON (names / presets / payouts). |
+| `cup_payouts_enabled` | off | Allow `//cup pay` to send real planets to cup winners. |
+| `cup_export_path` | *(blank)* | Directory for `//cup export` files (blank = working dir). |
+| `save_to_season` | on | When off, cups started from then on are excluded from the season leaderboard. |
 
-## Server startup mode
+### On-screen HUD
+| Setting | Default | Description |
+|---|---|---|
+| `show_match_hud` | on | Always-on left-side match HUD (round, players alive, KOs/round, times) during knockout rounds. |
+| `show_season_points` | on | Add each racer's running cup-points total as a column on the match HUD. |
+| `show_cup_widget` | off | Live standings widget during an active cup (experimental). |
 
-On boot, the app puts the server into a resting state (unless a cup/BOTN is
-already live from a restart, which it leaves alone):
+Display settings take effect live — no app reload.
 
-- `knockout` — load TimeAttack and wait for an admin to `//cup on`; `//cup off`
-  returns to TimeAttack between cups.
-- `botn` — auto-start a Bowl of the Night (below).
-- `none` — leave the server's own mode untouched.
+### Chat notifications
+| Setting | Default | Description |
+|---|---|---|
+| `notifications` | on | Master switch for the knockout chat notices below. |
+| `show_join` | on | Notify when a player joins the knockout. |
+| `show_knockout` | on | Notify when a player is knocked out. |
+| `show_winner` | on | Notify when a match winner is determined. |
 
-**Set it in a config file (launch-and-play).** Add a `KNOCKOUT_STARTUP_MODE` key
-to your PyPlanet settings and the server boots straight into that mode — no
-`//settings` needed. It overrides the live `startup_mode` setting.
+### Score modes
 
-- Python settings (`settings/base.py` or `settings/local.py`):
-  ```python
-  KNOCKOUT_STARTUP_MODE = 'botn'   # 'knockout' | 'botn' | 'none'
-  ```
-- YAML settings (`settings/base.yaml`):
-  ```yaml
-  KNOCKOUT_STARTUP_MODE: botn
-  ```
+Selectable per cup with `//cup scoremode <id>`:
 
-If the key is absent, the app falls back to the `startup_mode` setting (default
-`none`), tunable live via `//settings`.
+| Id | Points |
+|---|---|
+| `default` | 10, 8, 6, 5, 4, 3, 2, 1 |
+| `f1` | 25, 18, 15, 12, 10, 8, 6, 4, 2, 1 |
+| `flat` | 1 point for the win |
+| `survival` | sum of knockout survival points |
 
-## Bowl of the Night flow
+### Cup presets
 
-`//botn on` (or `startup_mode = botn`) starts a one-map cup (`cup_key = botn`),
-loads TimeAttack practice, and arms a Python cutoff clock. A right-side overlay
-counts down the whole time — "PRACTICE ENDS IN" to the cutoff, then "KNOCKOUT IN"
-through the handoff. At `botn_cutoff_time` the fastest practice time is recorded,
-the countdown runs, the fastest gets a shield (if enabled), then the app switches
-the *same map* to Knockout and plays to a winner — which records into the `botn`
-cup and auto-completes. Survives a PyPlanet restart mid-event.
-
----
-
-## Testing
-
-The pure core runs without PyPlanet:
-
-```bash
-pip install pytest && pytest          # or, with no pytest installed:
-python3 tests/test_callbacks.py        # each test file self-runs
-python3 tests/test_knockout_hud.py
-python3 tests/test_knockout_botn.py
-python3 tests/test_knockout_aggregation.py
-```
-
-Covered: callback parsers (`callbacks.py`), score modes, BOTN time helpers,
-season/marker aggregation, HUD formatting. Controllers that touch PyPlanet are
-thin wrappers over these pure functions — integration-test them on a dev server
-with `S_DebugBotsCount` and `//ko hud`.
-
----
-
-## Upgrading the database schema
-
-PyPlanet auto-creates missing **tables** but never adds **columns** to an existing
-table. `controllers/cup.py` carries an idempotent schema guard (`_ensure_schema`)
-that `ALTER TABLE`s any missing column on start — add new `(column, DDL)` pairs to
-its `expected` list when a model gains a field. (A fresh install starts with the
-correct schema, so the guard is a no-op until the *second* schema change.) For a
-larger migration graph, adopt `peewee-migrate` later.
+`cup_presets_path` points at a JSON file with three top-level keys — `names`,
+`presets`, and `payouts` — used by `//cup on <key>`, `//cup setup <preset>`, and
+`//cup pay`. See `presets_example.json`.

@@ -24,3 +24,10 @@ settings:
       - 'contrib.live_rankings'
       - 'contrib.ads'
       - 'apps.knockout'  # <-- Knockout app
+
+# Knockout app: pin the boot mode so the server just launches into it.
+#   'knockout' = idle in TimeAttack until an admin //cup on
+#   'botn'     = auto-start a Bowl of the Night (TimeAttack practice -> knockout)
+#   'none'     = leave the server's own mode alone (default)
+# Overrides the live startup_mode setting (//settings). Omit to use //settings.
+KNOCKOUT_STARTUP_MODE: botn

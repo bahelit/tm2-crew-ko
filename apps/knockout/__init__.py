@@ -157,8 +157,9 @@ class KnockoutConfig(AppConfig):
 			type=str,
 			description="What the server boots into: 'none' (leave the server's own mode "
 				"untouched), 'knockout' (TimeAttack idle, waiting for an admin //cup on), "
-				"or 'botn' (auto-start a Bowl of the Night). A session resumed from a "
-				"restart is never overridden.",
+				"or 'botn' (auto-start a Bowl of the Night). A KNOCKOUT_STARTUP_MODE key "
+				"in the PyPlanet settings file (settings/base.py or local.py) overrides "
+				"this. A session resumed from a restart is never overridden.",
 			default='none',
 		)
 		self.setting_botn_cutoff_time = Setting(
@@ -289,30 +290,58 @@ class KnockoutConfig(AppConfig):
 		await self._apply_startup_mode()
 
 	async def _apply_startup_mode(self):
-		"""Boot the server into its configured resting state (see startup_mode).
+		"""Boot the server into its configured resting state.
 
-		'none' leaves the server's own mode alone. 'knockout' drops to TimeAttack and
-		waits for an admin to //cup on. 'botn' auto-starts a Bowl of the Night. A
-		session already resumed from a restart (an active cup or BOTN) is left as-is.
+		The mode comes from a ``KNOCKOUT_STARTUP_MODE`` key in the PyPlanet settings
+		module (``settings/base.py`` or ``settings/local.py``) if set -- so the server
+		can be configured to "just launch" from a file -- otherwise from the live
+		``startup_mode`` setting (//settings). 'none' leaves the server's own mode
+		alone, 'knockout' drops to TimeAttack and waits for an admin //cup on, 'botn'
+		auto-starts a Bowl of the Night. A session already resumed from a restart (an
+		active cup or BOTN) is left as-is.
 		"""
-		try:
-			mode = (await self.setting_startup_mode.get_value() or 'none').strip().lower()
-		except Exception:
-			logger.exception('Knockout: could not read startup_mode')
-			return
+		mode, source = await self._resolve_startup_mode()
 		if mode == 'none':
 			return
 		if self.botn.active or self.cup.active_cup:
-			logger.info('Knockout: startup_mode=%s skipped (session already active)', mode)
+			logger.info('Knockout: startup_mode=%s (%s) skipped, session already active', mode, source)
 			return
 		if mode == 'knockout':
-			logger.info('Knockout: startup_mode=knockout -> TimeAttack, waiting for //cup on')
+			logger.info('Knockout: startup_mode=knockout (%s) -> TimeAttack, waiting for //cup on', source)
 			await self.return_to_timeattack()
 		elif mode == 'botn':
-			logger.info('Knockout: startup_mode=botn -> auto-starting Bowl of the Night')
+			logger.info('Knockout: startup_mode=botn (%s) -> auto-starting Bowl of the Night', source)
 			await self.botn.start()
 		else:
-			logger.warning('Knockout: unknown startup_mode %r (use none/knockout/botn)', mode)
+			logger.warning('Knockout: unknown startup_mode %r (%s); use none/knockout/botn', mode, source)
+
+	async def _resolve_startup_mode(self):
+		"""Return ``(mode, source)``. A ``KNOCKOUT_STARTUP_MODE`` key in the PyPlanet
+		settings file wins over the live ``startup_mode`` setting, so the boot mode can
+		be pinned in config for launch-and-play."""
+		file_mode = self._settings_file_startup_mode()
+		if file_mode:
+			return file_mode, 'config file'
+		try:
+			value = (await self.setting_startup_mode.get_value() or 'none').strip().lower()
+		except Exception:
+			logger.exception('Knockout: could not read startup_mode setting')
+			return 'none', 'setting (error)'
+		return value, 'setting'
+
+	@staticmethod
+	def _settings_file_startup_mode():
+		"""Read ``KNOCKOUT_STARTUP_MODE`` from the PyPlanet settings module, or None if
+		unset. Lets the boot mode live in ``settings/base.py`` / ``settings/local.py``."""
+		try:
+			from pyplanet.conf import settings as pp_settings
+			raw = getattr(pp_settings, 'KNOCKOUT_STARTUP_MODE', None)
+		except Exception:
+			return None
+		if raw is None:
+			return None
+		value = str(raw).strip().lower()
+		return value or None
 
 	async def return_to_timeattack(self):
 		"""Drop the server back to its TimeAttack resting state (next-map switch +

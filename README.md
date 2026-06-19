@@ -131,13 +131,29 @@ Cup presets are a JSON file (`names` / `presets` / `payouts`); see
 
 ## Server startup mode
 
-On boot, the app puts the server into the resting state set by `startup_mode`
-(unless a cup/BOTN is already live from a restart, which it leaves alone):
+On boot, the app puts the server into a resting state (unless a cup/BOTN is
+already live from a restart, which it leaves alone):
 
 - `knockout` — load TimeAttack and wait for an admin to `//cup on`; `//cup off`
   returns to TimeAttack between cups.
 - `botn` — auto-start a Bowl of the Night (below).
 - `none` — leave the server's own mode untouched.
+
+**Set it in a config file (launch-and-play).** Add a `KNOCKOUT_STARTUP_MODE` key
+to your PyPlanet settings and the server boots straight into that mode — no
+`//settings` needed. It overrides the live `startup_mode` setting.
+
+- Python settings (`settings/base.py` or `settings/local.py`):
+  ```python
+  KNOCKOUT_STARTUP_MODE = 'botn'   # 'knockout' | 'botn' | 'none'
+  ```
+- YAML settings (`settings/base.yaml`):
+  ```yaml
+  KNOCKOUT_STARTUP_MODE: botn
+  ```
+
+If the key is absent, the app falls back to the `startup_mode` setting (default
+`none`), tunable live via `//settings`.
 
 ## Bowl of the Night flow
 

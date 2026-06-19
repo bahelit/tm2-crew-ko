@@ -2,26 +2,26 @@
 	<!-- card -->
 	<quad pos="0. 0." size="42. 23." halign="left" valign="top"
 		style="Bgs1InRace" substyle="BgCardSystem" opacity="0.92" />
-	<!-- blue header strip (BOTD theme) -->
+	<!-- blue header strip (BOTN theme) -->
 	<quad pos="0. 0." size="42. 4.6." halign="left" valign="top" bgcolor="0099FF" opacity="0.95" />
 	<label pos="21. -0.5." size="40. 3.6." halign="center" valign="top"
-		textsize="1" textfont="GameFontBlack" textcolor="FFFFFF" text="KNOCKOUT IN" />
+		textsize="1" textfont="GameFontBlack" textcolor="FFFFFF" text="{{ header }}" />
 
-	<!-- big M:SS readout (driven by the script) -->
-	<label id="ko_botd_num" pos="21. -5.0." size="40. 12." halign="center" valign="top"
+	<!-- big readout (driven by the script) -->
+	<label id="ko_botn_num" pos="21. -5.0." size="40. 12." halign="center" valign="top"
 		textsize="6" textfont="GameFontBlack" textcolor="66FF66" text="15:00" />
 
 	<!-- progress bar: track + depleting fill -->
 	<quad pos="2. -20.4." size="38. 1.8." halign="left" valign="top" bgcolor="000000" opacity="0.55" />
-	<quad id="ko_botd_bar" pos="2. -20.4." size="38. 1.8." halign="left" valign="top" bgcolor="66FF66" opacity="0.95" />
+	<quad id="ko_botn_bar" pos="2. -20.4." size="38. 1.8." halign="left" valign="top" bgcolor="66FF66" opacity="0.95" />
 </frame>
 
 <script><!--
 #Include "TextLib" as TL
 
 main() {
-	declare CMlLabel CdNum <=> (Page.GetFirstChild("ko_botd_num") as CMlLabel);
-	declare CMlQuad  CdBar <=> (Page.GetFirstChild("ko_botd_bar") as CMlQuad);
+	declare CMlLabel CdNum <=> (Page.GetFirstChild("ko_botn_num") as CMlLabel);
+	declare CMlQuad  CdBar <=> (Page.GetFirstChild("ko_botn_bar") as CMlQuad);
 	declare Integer Total = {{ ms }};
 	if (Total <= 0) Total = 1;
 	declare Integer EndsAt = Now + Total;
@@ -35,9 +35,18 @@ main() {
 		declare Vec3 Col = <0.4, 1.0, 0.4>;
 		if (Secs <= 30) Col = <1.0, 0.78, 0.0>;
 		if (Secs <= 10) Col = <1.0, 0.2, 0.2>;
-		// M:SS once we are at a minute or more, bare seconds below that
+		// H:MM:SS from an hour up, M:SS from a minute up, bare seconds below that
 		declare Text T;
-		if (Secs >= 60) {
+		if (Secs >= 3600) {
+			declare Integer Hrs = Secs / 3600;
+			declare Integer RemMin = (Secs % 3600) / 60;
+			declare Integer RemSec = Secs % 60;
+			declare Text MinPad = TL::ToText(RemMin);
+			if (RemMin < 10) MinPad = "0" ^ MinPad;
+			declare Text SecPad = TL::ToText(RemSec);
+			if (RemSec < 10) SecPad = "0" ^ SecPad;
+			T = TL::ToText(Hrs) ^ ":" ^ MinPad ^ ":" ^ SecPad;
+		} else if (Secs >= 60) {
 			declare Integer Mins = Secs / 60;
 			declare Integer Rem = Secs % 60;
 			declare Text RemPad = TL::ToText(Rem);

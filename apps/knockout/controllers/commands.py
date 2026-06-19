@@ -65,18 +65,18 @@ class CupCommands:
 				.add_param(name='note', required=False, nargs='*', help='Marker note.'),
 			Command(command='hud', namespace='ko', target=self.cmd_hud, admin=True,
 				description='Diagnostic: report match HUD state and force a test render.'),
-			Command(command='on', namespace='botd', target=self.cmd_botd_on, admin=True,
-				description='Start a Bowl of the Evening (TimeAttack practice until the cutoff, then knockout).')
+			Command(command='on', namespace='botn', target=self.cmd_botn_on, admin=True,
+				description='Start a Bowl of the Night (TimeAttack practice until the cutoff, then knockout).')
 				.add_param(name='time', required=False, help='Override cutoff time HH:MM (e.g. 18:30).'),
-			Command(command='off', namespace='botd', target=self.cmd_botd_off, admin=True,
-				description='Stop the Bowl of the Evening.'),
-			Command(command='start', namespace='botd', target=self.cmd_botd_start, admin=True,
-				description='End BOTD practice now and start the knockout immediately.'),
-			Command(command='countdown', namespace='botd', target=self.cmd_botd_countdown, admin=True,
+			Command(command='off', namespace='botn', target=self.cmd_botn_off, admin=True,
+				description='Stop the Bowl of the Night.'),
+			Command(command='start', namespace='botn', target=self.cmd_botn_start, admin=True,
+				description='End BOTN practice now and start the knockout immediately.'),
+			Command(command='countdown', namespace='botn', target=self.cmd_botn_countdown, admin=True,
 				description='Set the seconds between practice closing and the knockout (e.g. 30 for testing).')
 				.add_param(name='seconds', required=True, type=int),
-			Command(command='status', namespace='botd', target=self.cmd_botd_status, admin=False,
-				description='Show the Bowl of the Evening phase and cutoff.'),
+			Command(command='status', namespace='botn', target=self.cmd_botn_status, admin=False,
+				description='Show the Bowl of the Night phase and cutoff.'),
 		)
 
 	# ------------------------------------------------------------------- admin
@@ -118,6 +118,8 @@ class CupCommands:
 			await self.instance.chat('$ff0>>> Cup $fff{}$ff0 stopped.'.format(cup.name))
 			await self.app.hide_widget()
 			await self._refresh_hud_season()
+			# Drop the server back to TimeAttack between cups.
+			await self.app.return_to_timeattack()
 		else:
 			await self.instance.chat('$f00>>> No active cup.', player)
 
@@ -211,23 +213,23 @@ class CupCommands:
 		await self.instance.chat(
 			'$ff0>>> Exported cup standings to: $fff{}$ff0'.format(', '.join(paths)), player)
 
-	# ------------------------------------------------------------ bowl of the evening
+	# ------------------------------------------------------------ bowl of the night
 
-	async def cmd_botd_on(self, player, data, **kwargs):
+	async def cmd_botn_on(self, player, data, **kwargs):
 		time_override = getattr(data, 'time', None) or None
-		await self.app.botd.start(player, time_override)
+		await self.app.botn.start(player, time_override)
 
-	async def cmd_botd_off(self, player, data, **kwargs):
-		await self.app.botd.stop(player)
+	async def cmd_botn_off(self, player, data, **kwargs):
+		await self.app.botn.stop(player)
 
-	async def cmd_botd_start(self, player, data, **kwargs):
-		await self.app.botd.force_start(player)
+	async def cmd_botn_start(self, player, data, **kwargs):
+		await self.app.botn.force_start(player)
 
-	async def cmd_botd_countdown(self, player, data, **kwargs):
-		await self.app.botd.set_countdown(player, data.seconds)
+	async def cmd_botn_countdown(self, player, data, **kwargs):
+		await self.app.botn.set_countdown(player, data.seconds)
 
-	async def cmd_botd_status(self, player, data, **kwargs):
-		await self.app.botd.status(player)
+	async def cmd_botn_status(self, player, data, **kwargs):
+		await self.app.botn.status(player)
 
 	# ------------------------------------------------------------------ public
 

@@ -1,10 +1,14 @@
 """
-Bowl of the Evening (BOTD) orchestration.
+Bowl of the Night (BOTN) orchestration.
 
 A daily one-map event: the server runs the day's map as open **TimeAttack**
 practice until a configured local time (default 17:00), then the app switches the
 *same map* into Knockout and runs it to a single winner. Because ManiaScript has no
 wall-clock access, all timing lives here in Python.
+
+A right-side overlay counts down the whole time: "PRACTICE ENDS IN" to the cutoff
+during practice, then "KNOCKOUT IN" through the short handoff window before the
+knockout loads.
 
 The fastest practice time can be granted a one-time shield in the knockout (the mode
 reads ``S_PreShieldLogins`` at match start; see ``Knockout.Script.txt``).
@@ -74,31 +78,31 @@ COUNTDOWN_MARKS = (600, 300, 120, 60, 30, 10)
 
 # --------------------------------------------------------------------- controller
 
-class BotdController:
-	"""Owns the BOTD lifecycle: start practice, schedule the cutoff, and hand off to
-	the knockout. One BOTD at a time, mirroring the single active cup."""
+class BotnController:
+	"""Owns the BOTN lifecycle: start practice, schedule the cutoff, and hand off to
+	the knockout. One BOTN at a time, mirroring the single active cup."""
 
 	def __init__(self, app):
 		self.app = app
 		self.instance = app.instance
 		self.active = False
-		self.phase = 'idle'        # 'idle' | 'practice' | 'knockout'
+		self.phase = 'idle'        # 'idle' | 'practice' | 'countdown' | 'knockout'
 		self.best = {}             # login -> best practice time (ms)
 		self.cutoff_ts = None      # epoch seconds of the cutoff
 		self._task = None          # asyncio waiter for the cutoff
 
 	async def on_start(self):
 		# Always listen for finishes; the handler ignores them unless we are in the
-		# practice phase, so this is cheap when no BOTD is running.
+		# practice phase, so this is cheap when no BOTN is running.
 		from pyplanet.apps.core.trackmania import callbacks as tm_signals
 		self.app.context.signals.listen(tm_signals.finish, self.on_practice_finish)
-		# Re-arm after a PyPlanet restart if a BOTD cup is still active and we are
+		# Re-arm after a PyPlanet restart if a BOTN cup is still active and we are
 		# back in (or never left) the TimeAttack practice phase.
 		await self._maybe_resume()
 
 	async def _maybe_resume(self):
 		cup = getattr(self.app.cup, 'active_cup', None)
-		if not cup or cup.cup_key != 'botd':
+		if not cup or cup.cup_key != 'botn':
 			return
 		try:
 			script = (await self.instance.mode_manager.get_current_script()) or ''
@@ -110,23 +114,24 @@ class BotdController:
 		# Still in practice (TimeAttack loaded): recompute today's cutoff and re-arm.
 		self.active, self.phase = True, 'practice'
 		await self._arm_from_setting()
-		logger.info('Knockout: resumed BOTD practice, cutoff re-armed')
+		await self._arm_practice_overlay()
+		logger.info('Knockout: resumed BOTN practice, cutoff re-armed')
 
 	# ------------------------------------------------------------------ lifecycle
 
-	async def start(self, player, time_override=None):
+	async def start(self, player=None, time_override=None):
 		if self.active:
-			await self.instance.chat('$f00>>> A Bowl of the Evening is already running. //botd off first.', player)
+			await self.instance.chat('$f00>>> A Bowl of the Night is already running. //botn off first.', player)
 			return
 
 		hour, minute = parse_hhmm(
-			time_override or await self.app.setting_botd_cutoff_time.get_value())
+			time_override or await self.app.setting_botn_cutoff_time.get_value())
 		self.cutoff_ts = next_occurrence(datetime.now(), hour, minute).timestamp()
 
-		# One-map cup so the knockout result auto-completes the BOTD.
+		# One-map cup so the knockout result auto-completes the BOTN.
 		score_mode = await self.app.setting_default_score_mode.get_value()
 		await self.app.cup.start_cup(
-			cup_key='botd', name='BOTD {}'.format(datetime.now().strftime('%Y-%m-%d')),
+			cup_key='botn', name='BOTN {}'.format(datetime.now().strftime('%Y-%m-%d')),
 			map_count=1, score_mode=score_mode,
 		)
 
@@ -134,40 +139,44 @@ class BotdController:
 		self.active, self.phase = True, 'practice'
 		await self._load_script(TIMEATTACK_SCRIPT)
 		self._arm_cutoff()
+		await self._arm_practice_overlay()
 		await self.app.commands._refresh_hud_season()
 
 		await self.instance.chat(
-			'$09f>>> $fffBowl of the Evening$09f started — practice until $fff{:02d}:{:02d}$09f, '
+			'$09f>>> $fffBowl of the Night$09f started — practice until $fff{:02d}:{:02d}$09f, '
 			'then the knockout begins.'.format(hour, minute))
 
-	async def stop(self, player):
+	async def stop(self, player=None):
 		if not self.active:
-			await self.instance.chat('$f00>>> No Bowl of the Evening is running.', player)
+			await self.instance.chat('$f00>>> No Bowl of the Night is running.', player)
 			return
 		self._cancel_task()
+		await self._hide_countdown_overlay()
 		self.active, self.phase = False, 'idle'
 		self.best = {}
 		await self.app.cup.stop_cup()
+		# Drop the server back to its TimeAttack resting state.
+		await self.app.return_to_timeattack()
 		await self.app.commands._refresh_hud_season()
-		await self.instance.chat('$09f>>> Bowl of the Evening stopped.')
+		await self.instance.chat('$09f>>> Bowl of the Night stopped.')
 
-	async def force_start(self, player):
+	async def force_start(self, player=None):
 		"""Admin override: end practice and start the knockout immediately."""
 		if not self.active or self.phase != 'practice':
-			await self.instance.chat('$f00>>> No BOTD practice phase to start the knockout from.', player)
+			await self.instance.chat('$f00>>> No BOTN practice phase to start the knockout from.', player)
 			return
 		self._cancel_task()
 		await self._on_cutoff()
 
-	async def status(self, player):
+	async def status(self, player=None):
 		if not self.active:
-			await self.instance.chat('$bbb>>> No Bowl of the Evening is running.', player)
+			await self.instance.chat('$bbb>>> No Bowl of the Night is running.', player)
 			return
 		when = datetime.fromtimestamp(self.cutoff_ts).strftime('%H:%M') if self.cutoff_ts else '—'
 		fastest = pick_fastest(self.best)
 		fastest_txt = await self._name(fastest) if fastest else 'nobody yet'
 		await self.instance.chat(
-			'$bbb>>> BOTD phase: $fff{}$bbb, knockout at $fff{}$bbb, fastest practice: $fff{}$bbb.'.format(
+			'$bbb>>> BOTN phase: $fff{}$bbb, knockout at $fff{}$bbb, fastest practice: $fff{}$bbb.'.format(
 				self.phase, when, fastest_txt), player)
 
 	# ------------------------------------------------------------- practice tracking
@@ -196,7 +205,7 @@ class BotdController:
 		self._task = asyncio.ensure_future(self._cutoff_waiter(delay))
 
 	async def _arm_from_setting(self):
-		hour, minute = parse_hhmm(await self.app.setting_botd_cutoff_time.get_value())
+		hour, minute = parse_hhmm(await self.app.setting_botn_cutoff_time.get_value())
 		self.cutoff_ts = next_occurrence(datetime.now(), hour, minute).timestamp()
 		self._arm_cutoff()
 
@@ -207,7 +216,7 @@ class BotdController:
 		except asyncio.CancelledError:
 			pass
 		except Exception:
-			logger.exception('Knockout: BOTD cutoff waiter failed')
+			logger.exception('Knockout: BOTN cutoff waiter failed')
 
 	def _cancel_task(self):
 		if self._task is not None and not self._task.done():
@@ -225,12 +234,12 @@ class BotdController:
 		# Stage the knockout settings (fastest-practice shield) so they are present
 		# when the mode's StartKnockout runs after the script switch.
 		settings = {}
-		if fastest and await self.app.setting_botd_fastest_shield.get_value():
+		if fastest and await self.app.setting_botn_fastest_shield.get_value():
 			settings = {'S_EnableShields': True, 'S_PreShieldLogins': fastest}
 
 		fastest_txt = await self._name(fastest) if fastest else 'nobody'
 		try:
-			total = max(0, int(await self.app.setting_botd_countdown_seconds.get_value() or 0))
+			total = max(0, int(await self.app.setting_botn_countdown_seconds.get_value() or 0))
 		except (TypeError, ValueError):
 			total = 900
 		await self._run_countdown(total, fastest_txt)
@@ -239,16 +248,16 @@ class BotdController:
 			await self._apply_knockout_settings(settings)
 		await self._load_script(KNOCKOUT_SCRIPT)
 		self.phase = 'knockout'
-		await self.instance.chat('$09f>>> $fffBowl of the Evening$09f knockout is GO!')
+		await self.instance.chat('$09f>>> $fffBowl of the Night$09f knockout is GO!')
 
 	async def _run_countdown(self, total, fastest_txt):
 		"""Announce the knockout start, then re-announce at each COUNTDOWN_MARK below
-		the total, sleeping the remainder before the handoff. A right-side overlay
-		ticks the same countdown client-side for everyone watching."""
+		the total, sleeping the remainder before the handoff. The right-side overlay
+		switches to "KNOCKOUT IN" and ticks the same countdown client-side."""
 		await self.instance.chat(
 			'$09f>>> Practice closed — fastest: $fff{}$09f. Knockout in $fff{}$09f!'.format(
 				fastest_txt, human_duration(total)))
-		await self._show_countdown_overlay(total)
+		await self._show_countdown_overlay(total, 'KNOCKOUT IN')
 		try:
 			remaining = total
 			for mark in COUNTDOWN_MARKS:
@@ -261,21 +270,29 @@ class BotdController:
 			if remaining > 0:
 				await asyncio.sleep(remaining)
 		finally:
-			# Always clear the overlay -- including when the BOTD is stopped mid
+			# Always clear the overlay -- including when the BOTN is stopped mid
 			# countdown (which cancels the waiter task and unwinds through here).
 			await self._hide_countdown_overlay()
 
-	async def _show_countdown_overlay(self, total):
-		cd = getattr(self.app, 'botd_countdown', None)
+	async def _arm_practice_overlay(self):
+		"""Show the right-side overlay counting down to the cutoff for the whole
+		practice phase ("PRACTICE ENDS IN"). Skipped if the cutoff is already due."""
+		remaining = int((self.cutoff_ts or time.time()) - time.time())
+		if remaining <= 0:
+			return
+		await self._show_countdown_overlay(remaining, 'PRACTICE ENDS IN')
+
+	async def _show_countdown_overlay(self, total, header):
+		cd = getattr(self.app, 'botn_countdown', None)
 		if cd is None or total <= 0:
 			return
 		try:
-			await cd.start(total)
+			await cd.start(total, header)
 		except Exception:
-			logger.exception('Knockout: BOTD countdown overlay failed to show')
+			logger.exception('Knockout: BOTN countdown overlay failed to show')
 
 	async def _hide_countdown_overlay(self):
-		cd = getattr(self.app, 'botd_countdown', None)
+		cd = getattr(self.app, 'botn_countdown', None)
 		if cd is None:
 			return
 		try:
@@ -289,9 +306,9 @@ class BotdController:
 		except (TypeError, ValueError):
 			await self.instance.chat('$f00>>> Countdown must be a whole number of seconds.', player)
 			return
-		await self.app.setting_botd_countdown_seconds.set_value(seconds)
+		await self.app.setting_botn_countdown_seconds.set_value(seconds)
 		await self.instance.chat(
-			'$09f>>> BOTD countdown set to $fff{}$09f.'.format(human_duration(seconds)), player)
+			'$09f>>> BOTN countdown set to $fff{}$09f.'.format(human_duration(seconds)), player)
 
 	# --------------------------------------------------------------------- helpers
 
@@ -302,7 +319,7 @@ class BotdController:
 			await self.instance.mode_manager.set_next_script(script)
 			await self.instance.gbx('RestartMap')
 		except Exception:
-			logger.exception('Knockout: BOTD failed to load script %s', script)
+			logger.exception('Knockout: BOTN failed to load script %s', script)
 
 	async def _apply_knockout_settings(self, settings):
 		mm = self.instance.mode_manager
@@ -314,7 +331,7 @@ class BotdController:
 			else:
 				await mm.update_settings(settings)
 		except Exception:
-			logger.exception('Knockout: BOTD failed to apply knockout settings')
+			logger.exception('Knockout: BOTN failed to apply knockout settings')
 
 	async def _name(self, login):
 		try:

@@ -10,7 +10,7 @@ are permanently missing from the mapping, so every one of their templates raises
 This bites mode-gated contrib apps. When the server boots in a mode an app does
 not support (e.g. our Crew Knockout mode, which ``live_rankings.is_mode_supported``
 rejects), ``apps.check()`` unloads that app before the loader mapping is frozen.
-A later mode switch (the BOTD flow moves the server to TimeAttack) reloads the app
+A later mode switch (the BOTN flow moves the server to TimeAttack) reloads the app
 and runs its ``on_start``, but the cached loader has no prefix for it -- so
 ``live_rankings``'s ``on_start`` dies on ``widget.display()``, leaving its
 ``race_widget`` as ``None`` and crashing every later signal it handles

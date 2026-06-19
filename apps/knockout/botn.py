@@ -173,6 +173,17 @@ class BotnController:
 			'$09f>>> $fffBowl of the Night$09f started — practice until $fff{:02d}:{:02d}$09f, '
 			'then the knockout begins.'.format(hour, minute))
 
+	async def start_fresh(self):
+		"""Clear any resumed/stale session and start a brand-new BOTN. Used by the
+		startup-mode boot path when a leftover knockout (or other active cup) should be
+		replaced with a fresh practice phase. ``start`` closes the stale cup for us when
+		it opens the new one, so we only need to reset our own in-memory flags first."""
+		self._cancel_task()
+		await self._hide_countdown_overlay()
+		self.active, self.phase = False, 'idle'
+		self.best = {}
+		await self.start()
+
 	async def stop(self, player=None):
 		if not self.active:
 			await self.instance.chat('$f00>>> No Bowl of the Night is running.', player)

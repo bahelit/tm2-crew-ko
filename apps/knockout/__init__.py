@@ -303,15 +303,23 @@ class KnockoutConfig(AppConfig):
 		mode, source = await self._resolve_startup_mode()
 		if mode == 'none':
 			return
-		if self.botn.active or self.cup.active_cup:
-			logger.info('Knockout: startup_mode=%s (%s) skipped, session already active', mode, source)
-			return
-		if mode == 'knockout':
+		if mode == 'botn':
+			# A genuinely in-progress practice phase is left to resume (its cutoff was
+			# re-armed on boot); anything else -- a handed-off knockout left active by a
+			# restart, or some other active cup -- is replaced with a fresh BOTN so a
+			# configured boot always lands in practice rather than a stale knockout.
+			if self.botn.active and self.botn.phase == 'practice':
+				logger.info('Knockout: startup_mode=botn (%s) -> resuming in-progress practice', source)
+				return
+			logger.info('Knockout: startup_mode=botn (%s) -> starting a fresh Bowl of the Night', source)
+			await self.botn.start_fresh()
+		elif mode == 'knockout':
+			# A resumed cup keeps running; otherwise idle in TimeAttack until //cup on.
+			if self.cup.active_cup:
+				logger.info('Knockout: startup_mode=knockout (%s) -> resumed cup, leaving as-is', source)
+				return
 			logger.info('Knockout: startup_mode=knockout (%s) -> TimeAttack, waiting for //cup on', source)
 			await self.return_to_timeattack()
-		elif mode == 'botn':
-			logger.info('Knockout: startup_mode=botn (%s) -> auto-starting Bowl of the Night', source)
-			await self.botn.start()
 		else:
 			logger.warning('Knockout: unknown startup_mode %r (%s); use none/knockout/botn', mode, source)
 

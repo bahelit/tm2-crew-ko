@@ -433,10 +433,13 @@ class LiveController:
 		if lower is None or not login:
 			return
 		name = await self._player_name(login)
+		# U+271A (✚, Dingbats block) renders in the ManiaPlanet font; the U+1F6E1
+		# shield emoji is supplementary-plane and showed as an empty box. Matches the
+		# ❌/★ glyphs used by the elimination/winner flashes above.
 		if awarded:
-			msg = '$09f\U0001f6e1 $fff{}$09f earned a shield!'.format(name)
+			msg = '$09f✚ $fff{}$09f earned a shield!'.format(name)
 		else:
-			msg = '$09f\U0001f6e1 $fff{}$09f used a shield to survive!'.format(name)
+			msg = '$09f✚ $fff{}$09f used a shield to survive!'.format(name)
 		await lower.flash(msg)
 
 	def _lower_third(self):

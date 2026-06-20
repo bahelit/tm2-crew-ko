@@ -3,6 +3,7 @@ import logging
 from pyplanet.contrib.command import Command
 
 from .. import payouts
+from ..botn import resolve_map_count
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +28,8 @@ class CupCommands:
 			Command(command='off', namespace='cup', target=self.cmd_off, admin=True,
 				description='Stop the active cup.'),
 			Command(command='mapcount', namespace='cup', target=self.cmd_mapcount, admin=True,
-				description='Set the number of maps in the cup (0 = open-ended).')
-				.add_param(name='count', required=True, type=int),
+				description='Set the number of maps in the cup (0 = open-ended, "all" = whole playlist).')
+				.add_param(name='count', required=True),
 			Command(command='edition', namespace='cup', target=self.cmd_edition, admin=True,
 				description='Set the cup edition number.')
 				.add_param(name='edition', required=True, type=int),
@@ -90,13 +91,21 @@ class CupCommands:
 		await live._refresh_season_points()
 		await live._refresh_overlays()
 
+	def _resolve_map_count(self, raw):
+		"""Resolve a configured/typed cup map count against the live playlist length.
+		``"all"`` / a negative number span the whole playlist (the Friday knockout cup
+		that runs through every map then completes); see ``botn.resolve_map_count``."""
+		return resolve_map_count(raw, self.app.playlist_length())
+
 	async def cmd_on(self, player, data, **kwargs):
 		explicit_name = ' '.join(data.name).strip() if getattr(data, 'name', None) else None
 
 		# Pull defaults from a named cup definition in the presets file, if any.
 		cup_cfg = self.app.presets.get_cup(data.key) or {}
 		name = explicit_name or cup_cfg.get('name')
-		map_count = int(cup_cfg.get('mapcount', 0) or 0)
+		# 'all' (or a negative count) spans the whole playlist: the cup completes after
+		# the knockout has run through every map (the Friday cup workflow).
+		map_count = self._resolve_map_count(cup_cfg.get('mapcount', 0))
 		score_mode = cup_cfg.get('scoremode')
 		if not score_mode:
 			score_mode = await self.app.setting_default_score_mode.get_value()
@@ -124,10 +133,13 @@ class CupCommands:
 			await self.instance.chat('$f00>>> No active cup.', player)
 
 	async def cmd_mapcount(self, player, data, **kwargs):
-		if not await self.cup.set_map_count(data.count):
+		# 'all' (or a negative count) spans the whole current playlist.
+		count = self._resolve_map_count(data.count)
+		if not await self.cup.set_map_count(count):
 			await self.instance.chat('$f00>>> No active cup.', player)
 			return
-		await self.instance.chat('$ff0>>> Cup map count set to $fff{}$ff0.'.format(data.count))
+		await self.instance.chat('$ff0>>> Cup map count set to $fff{}$ff0.'.format(
+			count if count else 'open-ended'))
 
 	async def cmd_edition(self, player, data, **kwargs):
 		if not await self.cup.set_edition(data.edition):

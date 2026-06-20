@@ -86,6 +86,31 @@ def test_human_duration():
 	assert botn.human_duration(0) == '0s'
 
 
+# --------------------------------------------------------------- resolve_map_count
+
+def test_resolve_map_count_all_sentinel():
+	# 'all' (any case / padding) spans the whole playlist.
+	assert botn.resolve_map_count('all', 7) == 7
+	assert botn.resolve_map_count('ALL', 5) == 5
+	assert botn.resolve_map_count('  all  ', 3) == 3
+
+
+def test_resolve_map_count_negative_spans_playlist():
+	assert botn.resolve_map_count(-1, 7) == 7
+	assert botn.resolve_map_count('-1', 4) == 4
+
+
+def test_resolve_map_count_plain_counts():
+	assert botn.resolve_map_count(0, 7) == 0       # open-ended
+	assert botn.resolve_map_count(3, 7) == 3
+	assert botn.resolve_map_count('5', 7) == 5
+
+
+def test_resolve_map_count_bad_input_is_open_ended():
+	assert botn.resolve_map_count('nope', 7) == 0
+	assert botn.resolve_map_count(None, 7) == 0
+
+
 # ----------------------------------------------------------------- countdown marks
 
 def test_countdown_marks_below_total():

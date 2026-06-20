@@ -1,17 +1,22 @@
 """
 Bowl of the Night (BOTN) orchestration.
 
-A daily one-map event: the server runs the day's map as open **TimeAttack**
-practice until a configured local time (default 17:00), then the app switches the
-*same map* into Knockout and runs it to a single winner. Because ManiaScript has no
-wall-clock access, all timing lives here in Python.
+A nightly event over a weekly playlist. Each night the server runs that night's map
+as open **TimeAttack** practice until a configured local time (default 17:00), then
+the app switches the *same map* into Knockout (after a few warm-up laps) and runs it
+to a single winner. When the knockout ends the server advances to the next playlist
+map back in TimeAttack and the cutoff re-arms for the next night. The whole playlist
+is one weekly cup (one map per night); when it completes a fresh weekly cup opens so
+the cycle continues. Because ManiaScript has no wall-clock access, all timing lives
+here in Python.
 
 A right-side overlay counts down the whole time: "PRACTICE ENDS IN" to the cutoff
 during practice, then "KNOCKOUT IN" through the short handoff window before the
 knockout loads.
 
-The fastest practice time can be granted a one-time shield in the knockout (the mode
-reads ``S_PreShieldLogins`` at match start; see ``Knockout.Script.txt``).
+The knockout warm-up length (``S_WarmUpNb``) and the fastest practice time's one-time
+shield (``S_PreShieldLogins``) are staged into the knockout settings at the cutoff;
+see ``Knockout.Script.txt``.
 """
 
 import asyncio
@@ -56,6 +61,21 @@ def pick_fastest(best_times):
 	if not best_times:
 		return None
 	return min(best_times, key=lambda login: best_times[login])
+
+
+def resolve_map_count(raw, playlist_length):
+	"""Resolve a configured/typed cup map count. The sentinel ``"all"`` (case-
+	insensitive) or a negative number means 'span the whole playlist' and resolves to
+	``playlist_length``; anything else is a plain count (0 = open-ended; unparseable
+	input falls back to 0). Shared by the weekly BOTN cup and the Friday 'all maps'
+	knockout cup."""
+	if isinstance(raw, str) and raw.strip().lower() == 'all':
+		return playlist_length
+	try:
+		count = int(raw)
+	except (TypeError, ValueError):
+		return 0
+	return playlist_length if count < 0 else count
 
 
 def human_duration(seconds):
@@ -155,11 +175,13 @@ class BotnController:
 			time_override or await self.app.setting_botn_cutoff_time.get_value())
 		self.cutoff_ts = next_occurrence(datetime.now(), hour, minute).timestamp()
 
-		# One-map cup so the knockout result auto-completes the BOTN.
+		# Weekly cup spanning the whole playlist: one map per night, the cup completes
+		# (and crowns a weekly champion) after the last map's knockout. A new weekly cup
+		# is opened automatically when one completes, so the nightly cycle continues.
 		score_mode = await self.app.setting_default_score_mode.get_value()
 		await self.app.cup.start_cup(
 			cup_key='botn', name='BOTN {}'.format(datetime.now().strftime('%Y-%m-%d')),
-			map_count=1, score_mode=score_mode,
+			map_count=self.app.playlist_length(), score_mode=score_mode,
 		)
 
 		self.best = {}
@@ -205,6 +227,38 @@ class BotnController:
 			return
 		self._cancel_task()
 		await self._on_cutoff()
+
+	async def on_knockout_recorded(self):
+		"""The night's knockout map just finished (its standings were recorded). Return
+		the server to TimeAttack and re-arm tomorrow's cutoff; the mode's own map-end
+		then advances the server to the next playlist map, which loads in TimeAttack.
+
+		If that map completed the weekly cup (the last map of the playlist), the cup
+		controller has already crowned the week's champion -- open a fresh weekly cup so
+		the nightly cycle continues into the next week."""
+		if not self.active or self.phase != 'knockout':
+			return
+
+		if getattr(self.app.cup, 'active_cup', None) is None:
+			score_mode = await self.app.setting_default_score_mode.get_value()
+			await self.app.cup.start_cup(
+				cup_key='botn', name='BOTN {}'.format(datetime.now().strftime('%Y-%m-%d')),
+				map_count=self.app.playlist_length(), score_mode=score_mode,
+			)
+			await self.app.commands._refresh_hud_season()
+
+		self.phase = 'practice'
+		self.best = {}
+		# Queue TimeAttack for the next map WITHOUT a RestartMap: the knockout's map-end
+		# advances the server to the next playlist map on its own, and our queued script
+		# loads with it.
+		await self.app.queue_timeattack()
+		await self._arm_from_setting()
+		await self._arm_practice_overlay()
+		when = datetime.fromtimestamp(self.cutoff_ts).strftime('%H:%M') if self.cutoff_ts else '—'
+		await self.instance.chat(
+			'$09f>>> Knockout done. Next map opens in $fffTimeAttack$09f practice — '
+			'next Bowl of the Night at $fff{}$09f.'.format(when))
 
 	async def status(self, player=None):
 		if not self.active:
@@ -269,11 +323,17 @@ class BotnController:
 		self.phase = 'countdown'
 		fastest = pick_fastest(self.best)
 
-		# Stage the knockout settings (fastest-practice shield) so they are present
-		# when the mode's StartKnockout runs after the script switch.
+		# Stage the knockout settings (warm-up laps + fastest-practice shield) so they
+		# are present when the mode's warm-up / StartKnockout runs after the script switch.
 		settings = {}
+		try:
+			warmup = max(0, int(await self.app.setting_botn_warmup_laps.get_value() or 0))
+		except (TypeError, ValueError):
+			warmup = 3
+		settings['S_WarmUpNb'] = warmup
 		if fastest and await self.app.setting_botn_fastest_shield.get_value():
-			settings = {'S_EnableShields': True, 'S_PreShieldLogins': fastest}
+			settings['S_EnableShields'] = True
+			settings['S_PreShieldLogins'] = fastest
 
 		fastest_txt = await self._name(fastest) if fastest else 'nobody'
 		try:

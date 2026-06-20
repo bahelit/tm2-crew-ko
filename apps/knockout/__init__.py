@@ -187,6 +187,15 @@ class KnockoutConfig(AppConfig):
 				'Settable live with //botn countdown <seconds> (e.g. 30 for testing)',
 			default=900,
 		)
+		self.setting_botn_warmup_laps = Setting(
+			'botn_warmup_laps',
+			'BOTN Warm-up Laps',
+			Setting.CAT_BEHAVIOUR,
+			type=int,
+			description='Warm-up laps the knockout runs before eliminations begin (S_WarmUpNb). '
+				'0 = none; default 3',
+			default=3,
+		)
 
 	async def on_init(self):
 		await self.context.setting.register(
@@ -209,6 +218,7 @@ class KnockoutConfig(AppConfig):
 			self.setting_botn_cutoff_time,
 			self.setting_botn_fastest_shield,
 			self.setting_botn_countdown_seconds,
+			self.setting_botn_warmup_laps,
 		)
 
 	async def on_start(self):
@@ -360,6 +370,28 @@ class KnockoutConfig(AppConfig):
 		except Exception:
 			logger.exception('Knockout: failed to return to TimeAttack')
 
+	async def queue_timeattack(self):
+		"""Queue TimeAttack for the NEXT map without restarting the current one. Used
+		when a knockout map is ending (e.g. a cup just completed on its last map): the
+		mode's own map-end advances to the next playlist map, which then loads in
+		TimeAttack rather than continuing the knockout rotation."""
+		try:
+			await self.instance.mode_manager.set_next_script(TIMEATTACK_SCRIPT)
+		except Exception:
+			logger.exception('Knockout: failed to queue TimeAttack')
+
+	def playlist_length(self, default=7):
+		"""Number of maps in the server's current playlist (matchsettings), or
+		``default`` if it can't be read. Used to size cups that should span the whole
+		map list (the weekly BOTN, the Friday 'all maps' knockout cup)."""
+		try:
+			maps = self.instance.map_manager.maps
+			count = len(maps) if maps else 0
+			return count or default
+		except Exception:
+			logger.exception('Knockout: could not read playlist length')
+			return default
+
 	async def on_match_recorded(self, map_start_time, standings):
 		"""Called by capture after a finished map's standings are persisted."""
 		await self.cup.on_match_recorded(map_start_time, standings)
@@ -369,11 +401,24 @@ class KnockoutConfig(AppConfig):
 		if live is not None:
 			await live._refresh_season_points()
 			await live._refresh_overlays()
+		# A BOTN knockout map just finished: hand the night's result to the BOTN
+		# controller so it returns to TimeAttack, advances to the next playlist map,
+		# and re-arms tomorrow's cutoff. Runs after the cup update above so the BOTN
+		# controller sees whether this map completed the weekly cup.
+		botn = getattr(self, 'botn', None)
+		if botn is not None and botn.active and botn.phase == 'knockout':
+			await botn.on_knockout_recorded()
 
 	async def on_cup_complete(self, cup):
-		"""Called by the cup controller when a cup reaches its map count."""
+		"""Called by the cup controller when a cup reaches its map count (e.g. a Friday
+		knockout cup that has run through the whole playlist)."""
 		await self.results.announce_top(cup)
 		await self.hide_widget()
+		# The cup just completed on its final knockout map; drop back to TimeAttack for
+		# the next map so the server doesn't keep cycling knockout after the cup is done.
+		# (For a BOTN weekly cup the BOTN controller re-opens a fresh cup right after and
+		# re-queues TimeAttack itself, so this is harmless there.)
+		await self.queue_timeattack()
 
 	async def update_widget(self):
 		"""Refresh the live widget, or hide it when no cup is active / disabled."""

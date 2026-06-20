@@ -18,7 +18,7 @@
 //     ---Label--- site, parent first then child). Match_LogVersions is plural
 //     (injected by ModeTrackmania); spawning is the ---Rounds_CanSpawn--- override
 //     (survivors = IsRacing); "wait for >=2 players" is the Rounds_WaitForPlayers
-//     hook; MB_WarmUp(0, 0) = no mode warm-up (BOTD TimeAttack is the warm-up);
+//     hook; MB_WarmUp(S_WarmUpNb, -1) = S_WarmUpNb warm-up laps (round mode), 0 = none;
 //     matchmaking off via Match_Settings (MB_Settings_UseDefaultMatchmaking=False).
 //   * XmlRpc:: in this chain binds to Libs/Nadeo/XmlRpc2 (RegisterCallback /
 //     UnregisterCallback / PassOn exist there, but NOT SendCallbackArray /
@@ -72,6 +72,7 @@
 #Setting S_RoundsPerMap			0		as _("Number of rounds per map (0 = infinite):")
 #Setting S_DoubleKnockUntil		20		as _("DoubleKO - knock 2 players until (0 = disabled):")
 #Setting S_PracticeRounds		0		as _("Practice rounds before eliminations start (0 = disabled):")
+#Setting S_WarmUpNb				0		as _("Warm-up laps before the knockout begins (0 = none):")
 #Setting S_FinishCountdown		30		as _("Seconds to finish after the first player (DNFs the rest):")
 #Setting S_EnableShields		False	as _("Earned shields: round winner banks a one-time save:")
 #Setting S_DebugBotsCount		0		as _("Number of fake players (debug only):")
@@ -286,8 +287,11 @@ Users_SetNbFakeUsers(S_DebugBotsCount, 0);
 
 UpdatePlayerColors();
 
-// No mode warm-up (count 0): BOTD's TimeAttack practice is the warm-up.
-MB_WarmUp(0, 0);
+// Warm-up before the knockout begins. Round mode (-1 time limit) so each warm-up
+// round runs the full map -- one lap on a normal map -- making S_WarmUpNb a count of
+// warm-up laps. 0 skips it (e.g. a BOTN whose TimeAttack practice already served as
+// the warm-up). The PyPlanet app sets S_WarmUpNb per event (BOTN / cup).
+MB_WarmUp(S_WarmUpNb, -1);
 UpdatePlayerColors();
 
 // Each map is a fresh knockout: flag a roster reseed so everyone present at this

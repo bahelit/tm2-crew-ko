@@ -83,7 +83,7 @@ set it once and the server comes up ready to play.
 |---|---|
 | `none` *(default)* | Leaves the server's own configured mode untouched. |
 | `knockout` | Loads **TimeAttack** and idles, waiting for an admin `//cup on`. |
-| `botn` | Auto-starts a **Bowl of the Night** (TimeAttack practice → knockout). |
+| `botn` | Auto-starts a **Bowl of the Night** (nightly TimeAttack practice → knockout, cycling a weekly playlist). |
 
 ### Where to set it
 
@@ -111,11 +111,22 @@ The server boots into TimeAttack and waits. An admin runs `//cup on` (optionally
 and `//cup off` stops the cup and **returns the server to TimeAttack** between
 cups. An active cup survives a controller restart and resumes automatically.
 
+**Run through the whole playlist (the Friday cup).** A cup whose map count is set
+to `all` (a preset's `"mapcount": "all"`, or `//cup mapcount all`) spans the
+**entire current playlist**: the knockout plays each map in turn and the cup
+**auto-completes** after the last one, announces the champion, and drops the server
+back to TimeAttack. A plain `0` map count is open-ended (never auto-completes), and
+a fixed number caps the cup at that many maps.
+
+So a typical Friday cup is: `//cup setup friday` (push the knockout mode), then
+`//cup on friday` with the `friday` preset carrying `"mapcount": "all"`.
+
 ### Bowl of the Night (`startup_mode = botn`)
 
-A daily one-map event recorded as a one-map cup (`cup_key = botn`):
+A **nightly** event over a **weekly playlist** — one map per night — recorded as a
+single weekly cup (`cup_key = botn`) sized to the playlist length:
 
-1. The server boots (or `//botn on`) into **TimeAttack practice** on the day's
+1. The server boots (or `//botn on`) into **TimeAttack practice** on that night's
    map, and arms a Python cutoff clock for `botn_cutoff_time`.
 2. A right-side overlay counts down the whole time — **"PRACTICE ENDS IN"** to the
    cutoff, then **"KNOCKOUT IN"** through the handoff. It is also re-sent to
@@ -123,8 +134,16 @@ A daily one-map event recorded as a one-map cup (`cup_key = botn`):
 3. At the cutoff the fastest practice time is recorded; if `botn_fastest_shield`
    is on, that player gets a one-time shield (save) in the knockout.
 4. After the `botn_countdown_seconds` handoff window the app switches the **same
-   map** to Knockout and plays to a winner — which records into the `botn` cup and
-   auto-completes.
+   map** to Knockout. The knockout runs `botn_warmup_laps` **warm-up laps**, then
+   plays to a winner — which records into the weekly `botn` cup.
+5. When the knockout ends, the server **advances to the next playlist map** back in
+   **TimeAttack**, and the cutoff re-arms for the next night. After the last map the
+   weekly cup completes (crowning the week's champion) and a fresh weekly cup opens
+   so the cycle continues.
+
+**Admin workflow.** Build a match-settings file with the week's maps (e.g. seven),
+launch the server with `startup_mode = botn`, and the cycle above runs unattended:
+TimeAttack countdown → knockout (warm-up laps → match → winner) → next map.
 
 **Restart behavior.** On a controller restart, a BOTN still genuinely in its
 **practice** phase is resumed (cutoff re-armed). Any other leftover — a knockout
@@ -144,7 +163,7 @@ Because ManiaScript has no wall clock, all BOTN timing lives in Python.
 | `//cup on [key] [name]` | Start a cup (key can match a preset). |
 | `//cup off` | Stop the active cup (returns the server to TimeAttack). |
 | `//cup setup <preset>` | Push a preset's mode script + settings. |
-| `//cup mapcount <n>` / `//cup edition <n>` / `//cup scoremode <id>` | Tune the active cup. |
+| `//cup mapcount <n\|all>` / `//cup edition <n>` / `//cup scoremode <id>` | Tune the active cup (`all` = whole playlist, `0` = open-ended). |
 | `//cup edit <index>` | Toggle whether a map counts towards the cup. |
 | `//cup export` | Write CSV + Discord-markdown standings. |
 | `//cup pay [payout]` | Pay planets to the standings (needs `cup_payouts_enabled`). |
@@ -175,6 +194,7 @@ settings file via `KNOCKOUT_STARTUP_MODE` (see [Startup &amp; modes](#startup--m
 |---|---|---|
 | `botn_cutoff_time` | `17:00` | Local `HH:MM` when practice ends and the knockout begins. |
 | `botn_countdown_seconds` | `900` | Seconds between practice closing and the knockout starting (15 min). Settable live with `//botn countdown <seconds>`. |
+| `botn_warmup_laps` | `3` | Warm-up laps the knockout runs before eliminations begin (mode's `S_WarmUpNb`). `0` = none. |
 | `botn_fastest_shield` | on | Grant the fastest practice time a one-time shield in the knockout. |
 
 ### Cups

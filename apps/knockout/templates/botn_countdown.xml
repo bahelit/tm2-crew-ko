@@ -3,7 +3,7 @@
 	<quad pos="0.8. -0.8." size="46. 27." halign="left" valign="top" bgcolor="000000" opacity="0.45" />
 
 	<!-- body -->
-	<quad pos="0. 0." size="46. 27." halign="left" valign="top" bgcolor="11151C" opacity="0.90" />
+	<quad pos="0. 0." size="46. 27." halign="left" valign="top" bgcolor="29313F" opacity="0.88" />
 	<!-- thin outline -->
 	<quad pos="0. 0." size="46. 27." halign="left" valign="top" style="Bgs1" substyle="BgColorContour" opacity="0.8" />
 
@@ -15,7 +15,7 @@
 
 	<!-- big readout (driven by the script) -->
 	<label id="ko_botn_num" pos="23. -8.6." size="44. 12." halign="center" valign="top"
-		textsize="6" textfont="GameFontBlack" textcolor="66FF66" text="15:00" />
+		textsize="6" textfont="GameFontBlack" textcolor="A6FFA6" text="15:00" />
 
 	<!-- progress bar: track + depleting fill -->
 	<quad pos="3. -23.2." size="40. 2.0." halign="left" valign="top" bgcolor="000000" opacity="0.6" />
@@ -38,9 +38,9 @@ main() {
 		if (Left < 0) Left = 0;
 		declare Integer Secs = (Left + 999) / 1000;
 		// green for most of the wait, amber under 30s, red under 10s
-		declare Vec3 Col = <0.4, 1.0, 0.4>;
-		if (Secs <= 30) Col = <1.0, 0.78, 0.0>;
-		if (Secs <= 10) Col = <1.0, 0.2, 0.2>;
+		declare Vec3 Col = <0.65, 1.0, 0.65>;
+		if (Secs <= 30) Col = <1.0, 0.85, 0.25>;
+		if (Secs <= 10) Col = <1.0, 0.45, 0.45>;
 		// H:MM:SS from an hour up, M:SS from a minute up, bare seconds below that
 		declare Text T;
 		if (Secs >= 3600) {

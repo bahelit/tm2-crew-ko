@@ -1,19 +1,19 @@
 <frame pos="118. -52." z-index="50">
 	<!-- card -->
-	<quad pos="0. 0." size="40. 23." halign="left" valign="top"
+	<quad pos="0. 0." size="40. 23." halign="left" valign="top" z-index="-1"
 		style="Bgs1InRace" substyle="BgCardSystem" opacity="0.92" />
 	<!-- red header strip -->
-	<quad pos="0. 0." size="40. 4.6." halign="left" valign="top" bgcolor="EE2222" opacity="0.95" />
-	<label pos="20. -0.5." size="38. 3.6." halign="center" valign="top"
+	<quad pos="0. 0." size="40. 4.6." halign="left" valign="top" z-index="0" bgcolor="EE2222" opacity="0.95" />
+	<label pos="20. -0.5." size="38. 3.6." halign="center" valign="top" z-index="1"
 		textsize="1" textfont="GameFontBlack" textcolor="FFFFFF" text="FINISH NOW" />
 
 	<!-- big seconds readout (driven by the script) -->
-	<label id="ko_cd_num" pos="20. -5.0." size="38. 12." halign="center" valign="top"
+	<label id="ko_cd_num" pos="20. -5.0." size="38. 12." halign="center" valign="top" z-index="1"
 		textsize="6" textfont="GameFontBlack" textcolor="66FF66" text="30" />
 
 	<!-- progress bar: track + depleting fill -->
-	<quad pos="2. -20.4." size="36. 1.8." halign="left" valign="top" bgcolor="000000" opacity="0.55" />
-	<quad id="ko_cd_bar" pos="2. -20.4." size="36. 1.8." halign="left" valign="top" bgcolor="66FF66" opacity="0.95" />
+	<quad pos="2. -20.4." size="36. 1.8." halign="left" valign="top" z-index="0" bgcolor="000000" opacity="0.55" />
+	<quad id="ko_cd_bar" pos="2. -20.4." size="36. 1.8." halign="left" valign="top" z-index="1" bgcolor="66FF66" opacity="0.95" />
 </frame>
 
 <script><!--

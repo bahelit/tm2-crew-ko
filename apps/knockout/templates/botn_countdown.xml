@@ -1,11 +1,13 @@
 <frame pos="114. 34." z-index="50">
 	<!-- header tab: black box + white bold label, matching the match panel -->
-	<quad pos="0. 0." size="46. 7." halign="left" valign="top" bgcolor="000000" opacity="0.85" />
-	<label pos="23. -1.6." size="44. 4." halign="center" valign="top"
+	<quad pos="0. 0." size="46. 7." halign="left" valign="top" z-index="-1" bgcolor="000000" opacity="0.85" />
+	<label pos="23. -1.6." size="44. 4." halign="center" valign="top" z-index="1"
 		textsize="2" textfont="GameFontBlack" textcolor="FFFFFF" text="{{ header }}" />
 
+	<!-- dark backing so the readout stays legible over bright track scenery -->
+	<quad pos="0. -7." size="46. 14." halign="left" valign="top" z-index="-1" bgcolor="000000" opacity="0.75" />
 	<!-- big readout: white like the panel; the script shifts it amber/red near the end -->
-	<label id="ko_botn_num" pos="23. -9.4." size="46. 12." halign="center" valign="top"
+	<label id="ko_botn_num" pos="23. -9.4." size="46. 12." halign="center" valign="top" z-index="1"
 		textsize="6" textfont="GameFontBlack" textcolor="FFFFFF" text="15:00" />
 </frame>
 

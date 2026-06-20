@@ -1,7 +1,7 @@
 <frame pos="48. -56." z-index="40">
 	<!-- header tab: black box + white bold label, matching the match panel -->
-	<quad pos="0. 0." size="64. 5.4." halign="left" valign="top" bgcolor="000000" opacity="0.85" />
-	<label pos="2. -1.1." size="60. 3.4." halign="left" valign="top"
+	<quad pos="0. 0." size="64. 5.4." halign="left" valign="top" z-index="-1" bgcolor="000000" opacity="0.85" />
+	<label pos="2. -1.1." size="60. 3.4." halign="left" valign="top" z-index="1"
 		textsize="1" textfont="GameFontBlack" textcolor="FFFFFF" text="SPLITS" />
 
 	{% for row in rows %}

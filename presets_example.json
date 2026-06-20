@@ -29,7 +29,8 @@
 				"S_WarmUpNb": 3,
 				"S_FinishCountdown": 30,
 				"S_DoubleKnockUntil": 20,
-				"S_ForceLapsNb": 0
+				"S_ForceLapsNb": 0,
+				"S_EnableShields": true
 			}
 		},
 		"knockout_rotate": {

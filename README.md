@@ -121,6 +121,12 @@ a fixed number caps the cup at that many maps.
 So a typical Friday cup is: `//cup setup friday` (push the knockout mode), then
 `//cup on friday` with the `friday` preset carrying `"mapcount": "all"`.
 
+**Shields (earned saves).** The knockout's earned-shield feature (the round winner
+banks a one-time save against elimination, `S_EnableShields`) is a mode setting, so
+enable it per cup through its preset — the example `knockout_friday` preset turns it
+on. BOTN deliberately leaves shields off (Cup-of-the-Day style); the Friday cup is
+where they belong.
+
 ### Bowl of the Night (`startup_mode = botn`)
 
 A **nightly** event over a **weekly playlist** — one map per night — recorded as a
@@ -131,11 +137,12 @@ single weekly cup (`cup_key = botn`) sized to the playlist length:
 2. A right-side overlay counts down the whole time — **"PRACTICE ENDS IN"** to the
    cutoff, then **"KNOCKOUT IN"** through the handoff. It is also re-sent to
    players who connect mid-countdown, with their correct remaining time.
-3. At the cutoff the fastest practice time is recorded; if `botn_fastest_shield`
-   is on, that player gets a one-time shield (save) in the knockout.
+3. At the cutoff the fastest practice time is recorded (for the announcement only).
 4. After the `botn_countdown_seconds` handoff window the app switches the **same
    map** to Knockout. The knockout runs `botn_warmup_laps` **warm-up laps**, then
-   plays to a winner — which records into the weekly `botn` cup.
+   plays to a winner — which records into the weekly `botn` cup. BOTN re-creates
+   TM2020's **Cup of the Day**: a plain knockout with **no shields** (shields are
+   forced off; they stay available to the Friday knockout cup — see below).
 5. When the knockout ends, the server **advances to the next playlist map** back in
    **TimeAttack**, and the cutoff re-arms for the next night. After the last map the
    weekly cup completes (crowning the week's champion) and a fresh weekly cup opens
@@ -195,7 +202,6 @@ settings file via `KNOCKOUT_STARTUP_MODE` (see [Startup &amp; modes](#startup--m
 | `botn_cutoff_time` | `17:00` | Local `HH:MM` when practice ends and the knockout begins. |
 | `botn_countdown_seconds` | `900` | Seconds between practice closing and the knockout starting (15 min). Settable live with `//botn countdown <seconds>`. |
 | `botn_warmup_laps` | `3` | Warm-up laps the knockout runs before eliminations begin (mode's `S_WarmUpNb`). `0` = none. |
-| `botn_fastest_shield` | on | Grant the fastest practice time a one-time shield in the knockout. |
 
 ### Cups
 | Setting | Default | Description |

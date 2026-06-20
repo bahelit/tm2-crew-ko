@@ -170,14 +170,6 @@ class KnockoutConfig(AppConfig):
 			description='Local HH:MM when BOTN practice ends and the knockout begins (default 17:00)',
 			default='17:00',
 		)
-		self.setting_botn_fastest_shield = Setting(
-			'botn_fastest_shield',
-			'BOTN Fastest-Practice Shield',
-			Setting.CAT_BEHAVIOUR,
-			type=bool,
-			description='Grant the fastest BOTN practice time a one-time shield (save) in the knockout',
-			default=True,
-		)
 		self.setting_botn_countdown_seconds = Setting(
 			'botn_countdown_seconds',
 			'BOTN Countdown Seconds',
@@ -216,7 +208,6 @@ class KnockoutConfig(AppConfig):
 			self.setting_save_to_season,
 			self.setting_startup_mode,
 			self.setting_botn_cutoff_time,
-			self.setting_botn_fastest_shield,
 			self.setting_botn_countdown_seconds,
 			self.setting_botn_warmup_laps,
 		)

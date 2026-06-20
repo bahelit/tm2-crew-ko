@@ -14,9 +14,10 @@ A right-side overlay counts down the whole time: "PRACTICE ENDS IN" to the cutof
 during practice, then "KNOCKOUT IN" through the short handoff window before the
 knockout loads.
 
-The knockout warm-up length (``S_WarmUpNb``) and the fastest practice time's one-time
-shield (``S_PreShieldLogins``) are staged into the knockout settings at the cutoff;
-see ``Knockout.Script.txt``.
+BOTN re-creates TrackMania 2020's Cup of the Day: a plain knockout with **no shields**.
+Only the knockout warm-up length (``S_WarmUpNb``) is staged into the knockout settings at
+the cutoff (and shields are forced off); see ``Knockout.Script.txt``. The earned-shield
+feature stays available to the Friday knockout cup via its preset's ``S_EnableShields``.
 """
 
 import asyncio
@@ -318,22 +319,24 @@ class BotnController:
 	async def _on_cutoff(self):
 		if not self.active or self.phase != 'practice':
 			return
-		# Practice (and so the fastest-lap shield race) is locked in at the cutoff; the
-		# countdown is just a heads-up before the knockout loads.
+		# Practice is locked in at the cutoff; the countdown is just a heads-up before the
+		# knockout loads. BOTN re-creates TM2020's Cup of the Day: a plain knockout with no
+		# shields, so we only stage the warm-up laps (no S_EnableShields / pre-shield).
 		self.phase = 'countdown'
 		fastest = pick_fastest(self.best)
 
-		# Stage the knockout settings (warm-up laps + fastest-practice shield) so they
-		# are present when the mode's warm-up / StartKnockout runs after the script switch.
+		# Stage the knockout warm-up so it is present when the mode's warm-up / StartKnockout
+		# runs after the script switch.
 		settings = {}
 		try:
 			warmup = max(0, int(await self.app.setting_botn_warmup_laps.get_value() or 0))
 		except (TypeError, ValueError):
 			warmup = 3
 		settings['S_WarmUpNb'] = warmup
-		if fastest and await self.app.setting_botn_fastest_shield.get_value():
-			settings['S_EnableShields'] = True
-			settings['S_PreShieldLogins'] = fastest
+		# Shields stay off for BOTN (Cup of the Day style); they remain available to the
+		# Friday knockout cup via its preset's S_EnableShields.
+		settings['S_EnableShields'] = False
+		settings['S_PreShieldLogins'] = ''
 
 		fastest_txt = await self._name(fastest) if fastest else 'nobody'
 		try:

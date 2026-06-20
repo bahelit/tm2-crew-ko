@@ -17,10 +17,10 @@ HEAD_ROWS = 4
 MAX_ROWS = 16
 
 # Per-cell colours.
-WHITE = 'FFFFFF'
-RED = 'FF3333'        # on the elimination bubble
-GREEN = '66FF66'      # safe gap behind the leader
-LEADER = '33DDFF'     # the leader's absolute time
+WHITE = 'FFFFFF'      # rank + name (clan-tag $codes colour the names themselves)
+RED = 'FF3333'        # times in the danger zone (about to be eliminated)
+GREEN = '66FF66'      # safe times: the leader's absolute time and the gaps behind it
+BUBBLE = 'FFCC00'     # the last safe time, one spot above the cut line
 DIM = 'AAAAAA'        # no time yet / gap marker
 
 
@@ -129,7 +129,7 @@ class MatchHud(TemplateView):
 			if ms < 0:
 				time_text, time_color = '—', DIM
 			elif leader_ms is not None and ms == leader_ms:
-				time_text, time_color = format_race_time(ms), LEADER
+				time_text, time_color = format_race_time(ms), GREEN
 			else:
 				time_text, time_color = format_gap(ms - (leader_ms or 0)), GREEN
 			if is_danger:
@@ -140,7 +140,9 @@ class MatchHud(TemplateView):
 				rank=index + 1,
 				name=await self._name(login),
 				time=time_text,
-				name_color=RED if is_danger else WHITE,
+				# Names stay white so the clan-tag colours show; the danger zone reads
+				# as red times below the divider, matching the cup-of-the-day style.
+				name_color=WHITE,
 				time_color=time_color,
 				season_points=(season.get(login, 0) if show_season else None),
 			))
@@ -173,15 +175,18 @@ class MatchHud(TemplateView):
 		return rows[:HEAD_ROWS] + [dict(gap=True)] + rows[-tail:]
 
 	def _layout(self, rows):
-		"""Assign each row its y position and find the divider above the first
-		danger row (red name)."""
+		"""Assign each row its y position, drop the divider above the first danger
+		row, and gild the last safe time (the bubble) just above the cut line."""
 		self.has_divider = False
 		self.divider_y = 0.0
 		for index, row in enumerate(rows):
 			row['y'] = START_Y - index * ROW_H
-			if not self.has_divider and not row.get('gap') and row.get('name_color') == RED:
+			if not self.has_divider and not row.get('gap') and row.get('danger'):
 				self.has_divider = True
 				self.divider_y = row['y'] + 0.6
+				prev = rows[index - 1] if index > 0 else None
+				if prev and not prev.get('gap') and not prev.get('danger'):
+					prev['time_color'] = BUBBLE
 
 	async def _name(self, login):
 		try:
@@ -200,10 +205,10 @@ class MatchHud(TemplateView):
 		self.ko_text = '2 UNTIL 8 PLAYERS'
 		self.show_season = False
 		self.rows = [
-			dict(gap=False, danger=False, rank=1, name='Test A', time='12.470', name_color=WHITE, time_color=LEADER),
+			dict(gap=False, danger=False, rank=1, name='Test A', time='12.470', name_color=WHITE, time_color=GREEN),
 			dict(gap=False, danger=False, rank=2, name='Test B', time='+0.031', name_color=WHITE, time_color=GREEN),
 			dict(gap=False, danger=False, rank=3, name='Test C', time='+0.250', name_color=WHITE, time_color=GREEN),
-			dict(gap=False, danger=True, rank=4, name='Test D', time='+0.500', name_color=RED, time_color=RED),
+			dict(gap=False, danger=True, rank=4, name='Test D', time='+0.500', name_color=WHITE, time_color=RED),
 		]
 		self._layout(self.rows)
 		if player is not None:

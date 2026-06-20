@@ -12,7 +12,7 @@ from .season import SeasonController
 from .controllers.live import LiveController
 from .markers import MarkersController
 from .config import PresetConfig
-from .views import CupWidget, CupTicker, CupLowerThird, MatchHud, FinishCountdown, BotnCountdown
+from .views import CupWidget, CupTicker, CupLowerThird, MatchHud, FinishCountdown, BotnCountdown, SplitsHud
 from . import score_modes
 from . import callbacks
 from .loader_fix import install_selfhealing_loader
@@ -264,6 +264,10 @@ class KnockoutConfig(AppConfig):
 		# Right-side countdown, armed by the BotnController for the whole Bowl of the
 		# Night: "PRACTICE ENDS IN" to the cutoff, then "KNOCKOUT IN" through the handoff.
 		self.botn_countdown = BotnCountdown(self)
+
+		# Bottom centre-right rolling feed of checkpoint splits, driven by the
+		# LiveController's waypoint handler during live rounds (gated on the match HUD).
+		self.splits = SplitsHud(self)
 
 		# Live match state drives the overlays and marker events.
 		self.live = LiveController(self)

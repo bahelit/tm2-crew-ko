@@ -5,8 +5,12 @@ from pyplanet.apps.core.trackmania import callbacks as tm_signals
 
 from ..models import MatchInfo
 from ..callbacks import parse_round_order, parse_round_start, first_login, register
+from ..hud_format import format_race_time, format_gap, split_cp_label
 
 logger = logging.getLogger(__name__)
+
+# Most recent checkpoint crossings kept in the bottom splits feed (newest first).
+CP_FEED_MAX = 6
 
 
 class LiveController:
@@ -43,6 +47,11 @@ class LiveController:
 		# callback. Populated during warm-up too, so the HUD can show times before
 		# any KO round data arrives. Reset each map.
 		self.best_times = {}
+		# Checkpoint splits feed: cp_best maps a checkpoint ordinal -> the best race
+		# time (ms) seen at it this round; cp_feed is the newest-first list of recent
+		# crossings (ready-to-render row dicts). Both reset each round and map.
+		self.cp_best = {}
+		self.cp_feed = []
 		# Running cup total (login -> points so far in the active cup), shown as the
 		# HUD's points column. Cached because compute_standings sums every counted map
 		# and the HUD refreshes on every live event; only refreshed on the infrequent
@@ -96,6 +105,9 @@ class LiveController:
 		# before the KO round callbacks start arriving.
 		self.app.context.signals.listen(tm_signals.finish, self.on_finish)
 
+		# Checkpoint crossings drive the bottom splits feed during live rounds.
+		self.app.context.signals.listen(tm_signals.waypoint, self.on_waypoint)
+
 		# Keep the warm-up roster current as players come and go.
 		self.app.context.signals.listen(mp_signals.player.player_connect, self.on_roster_change)
 		self.app.context.signals.listen(mp_signals.player.player_disconnect, self.on_roster_change)
@@ -123,6 +135,8 @@ class LiveController:
 		self.round = 0
 		self.total_rounds = 0
 		self.best_times = {}
+		self.cp_best = {}
+		self.cp_feed = []
 		# Only show the HUD while a Knockout mode is loaded.
 		self.is_knockout = await self._read_is_knockout()
 		# Number this match for the HUD title ("MATCH n").
@@ -229,6 +243,45 @@ class LiveController:
 			self._countdown_armed = True
 			await self._show_countdown()
 
+	async def on_waypoint(self, player=None, race_time=None, race_cps=None, is_end_race=False, **kwargs):
+		"""Feed the bottom splits panel. On each checkpoint crossing during a live
+		scored round, record the player's split versus the best time seen at that
+		checkpoint so far: the leading split shows as an absolute time, the rest as a
+		``+gap``. Only live rounds count, so warm-up driving never clutters the feed."""
+		if not (self.round > 0 and self.phase in ('racing', 'showdown')):
+			return
+		login = getattr(player, 'login', None) or (str(player) if player else '')
+		if not login:
+			return
+		try:
+			ms = int(race_time)
+		except (TypeError, ValueError):
+			return
+		if ms < 0:
+			return
+		# Checkpoint ordinal: how many checkpoints have been crossed this lap so far.
+		try:
+			count = len(race_cps) if race_cps else 0
+		except TypeError:
+			count = 0
+		if count <= 0:
+			return
+		prev_best = self.cp_best.get(count)
+		if prev_best is None or ms <= prev_best:
+			self.cp_best[count] = ms
+			split_text = format_race_time(ms)
+		else:
+			split_text = format_gap(ms - prev_best)
+		name = await self._player_name(login)
+		self.cp_feed.insert(0, dict(
+			name=name,
+			cp=split_cp_label(count, is_end_race),
+			split=split_text,
+			color='66FF66',
+		))
+		del self.cp_feed[CP_FEED_MAX:]
+		await self._refresh_splits()
+
 	async def on_roster_change(self, *args, **kwargs):
 		"""A player connected/disconnected; repaint the warm-up roster."""
 		await self._refresh_overlays()
@@ -311,8 +364,10 @@ class LiveController:
 		self.round = round
 		self.total_rounds = total
 		# New round: clear last round's finish countdown so the next first-finisher
-		# re-arms it.
+		# re-arms it, and reset the per-round checkpoint splits.
 		self._countdown_armed = False
+		self.cp_best = {}
+		self.cp_feed = []
 		await self._hide_countdown()
 		await self._refresh_overlays()
 
@@ -385,6 +440,28 @@ class LiveController:
 					await hud.hide()
 				except Exception:
 					logger.exception('Knockout: failed to hide match HUD')
+
+		await self._refresh_splits()
+
+	async def _refresh_splits(self):
+		"""Show the bottom splits feed during a live round (gated on the match-HUD
+		toggle), and hide it the moment the round ends, warm-up returns, or the feed
+		is empty -- so it never lingers between rounds."""
+		view = getattr(self.app, 'splits', None)
+		if view is None:
+			return
+		live_round = self.round > 0 and self.phase in ('racing', 'showdown')
+		try:
+			enabled = await self.app.setting_show_match_hud.get_value()
+		except Exception:
+			enabled = True
+		try:
+			if enabled and live_round and self.cp_feed:
+				await view.refresh(self.cp_feed)
+			else:
+				await view.hide()
+		except Exception:
+			logger.exception('Knockout: failed to refresh splits HUD')
 
 	async def _show_countdown(self):
 		"""Show the lower-right DNF countdown (respects the match-HUD toggle)."""

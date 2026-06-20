@@ -21,6 +21,24 @@ def _load(name, filename):
 
 
 botn = _load('ko_botn', 'botn.py')
+hud_format = _load('ko_hud_format', 'hud_format.py')
+
+
+# --------------------------------------------------------------- split_cp_label
+
+def test_split_cp_label_checkpoints():
+	assert hud_format.split_cp_label(1, False) == 'CP 1'
+	assert hud_format.split_cp_label(3, False) == 'CP 3'
+
+
+def test_split_cp_label_finish_wins():
+	# is_end_race takes priority over the checkpoint count.
+	assert hud_format.split_cp_label(9, True) == 'FIN'
+
+
+def test_split_cp_label_bad_input():
+	assert hud_format.split_cp_label(0, False) == 'CP'
+	assert hud_format.split_cp_label(None, False) == 'CP'
 
 
 # ------------------------------------------------------------------ parse_hhmm

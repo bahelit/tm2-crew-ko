@@ -37,6 +37,20 @@ def format_gap(ms):
 	return '+{}.{:03d}'.format(seconds, millis)
 
 
+def split_cp_label(cp_count, is_end_race):
+	"""Label for a checkpoint crossing in the splits feed: ``FIN`` at the finish
+	line, otherwise ``CP n`` (1-based, the number of checkpoints crossed so far)."""
+	if is_end_race:
+		return 'FIN'
+	try:
+		n = int(cp_count)
+	except (TypeError, ValueError):
+		n = 0
+	if n <= 0:
+		return 'CP'
+	return 'CP {}'.format(n)
+
+
 def row_color(danger, finished):
 	"""Text colour for a HUD row: red on the elimination bubble, green once the
 	player has safely finished, white otherwise."""

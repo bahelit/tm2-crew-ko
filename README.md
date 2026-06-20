@@ -215,9 +215,15 @@ settings file via `KNOCKOUT_STARTUP_MODE` (see [Startup &amp; modes](#startup--m
 ### On-screen HUD
 | Setting | Default | Description |
 |---|---|---|
-| `show_match_hud` | on | Always-on left-side match HUD (round, players alive, KOs/round, times) during knockout rounds. |
+| `show_match_hud` | on | Always-on left-side match HUD (round, players alive, KOs/round, times) during knockout rounds. Also gates the bottom checkpoint-splits feed below. |
 | `show_season_points` | on | Add each racer's running cup-points total as a column on the match HUD. |
 | `show_cup_widget` | off | Live standings widget during an active cup (experimental). |
+
+A bottom centre-right **checkpoint-splits feed** rides alongside the match HUD: as
+players cross checkpoints during a live round it lists the most recent crossings —
+player, checkpoint, and split versus the best time at that checkpoint (leading split
+as an absolute time, the rest as a `+gap`). It shows only during live rounds and
+follows the `show_match_hud` toggle.
 
 Display settings take effect live — no app reload.
 

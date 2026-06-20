@@ -1,0 +1,15 @@
+<frame pos="48. -56." z-index="40">
+	<!-- header tab: black box + white bold label, matching the match panel -->
+	<quad pos="0. 0." size="64. 5.4." halign="left" valign="top" bgcolor="000000" opacity="0.85" />
+	<label pos="2. -1.1." size="60. 3.4." halign="left" valign="top"
+		textsize="1" textfont="GameFontBlack" textcolor="FFFFFF" text="SPLITS" />
+
+	{% for row in rows %}
+	<label pos="2. {{ row.y }}." size="34. 3.5." halign="left" valign="top"
+		textsize="1" textfont="GameFontSemiBold" textcolor="FFFFFF" text="{{ row.name }}" />
+	<label pos="40. {{ row.y }}." size="14. 3.5." halign="left" valign="top"
+		textsize="1" textfont="GameFontSemiBold" textcolor="AAAAAA" text="{{ row.cp }}" />
+	<label pos="62. {{ row.y }}." size="18. 3.5." halign="right" valign="top"
+		textsize="1" textfont="GameFontSemiBold" textcolor="{{ row.color }}" text="{{ row.split }}" />
+	{% endfor %}
+</frame>

@@ -1,19 +1,25 @@
-<frame pos="118. 34." z-index="50">
-	<!-- card -->
-	<quad pos="0. 0." size="42. 23." halign="left" valign="top"
-		style="Bgs1InRace" substyle="BgCardSystem" opacity="0.92" />
-	<!-- blue header strip (BOTN theme) -->
-	<quad pos="0. 0." size="42. 4.6." halign="left" valign="top" bgcolor="0099FF" opacity="0.95" />
-	<label pos="21. -0.5." size="40. 3.6." halign="center" valign="top"
+<frame pos="114. 34." z-index="50">
+	<!-- drop shadow -->
+	<quad pos="0.8. -0.8." size="46. 27." halign="left" valign="top" bgcolor="000000" opacity="0.45" />
+
+	<!-- body -->
+	<quad pos="0. 0." size="46. 27." halign="left" valign="top" bgcolor="11151C" opacity="0.90" />
+	<!-- thin outline -->
+	<quad pos="0. 0." size="46. 27." halign="left" valign="top" style="Bgs1" substyle="BgColorContour" opacity="0.8" />
+
+	<!-- header strip (BOTN blue) + accent underline -->
+	<quad pos="0. 0." size="46. 6.2." halign="left" valign="top" bgcolor="0A84FF" opacity="0.95" />
+	<quad pos="0. -6.2." size="46. 0.4." halign="left" valign="top" bgcolor="66B8FF" opacity="0.95" />
+	<label pos="23. -1.5." size="44. 3.4." halign="center" valign="top"
 		textsize="1" textfont="GameFontBlack" textcolor="FFFFFF" text="{{ header }}" />
 
 	<!-- big readout (driven by the script) -->
-	<label id="ko_botn_num" pos="21. -5.0." size="40. 12." halign="center" valign="top"
+	<label id="ko_botn_num" pos="23. -8.6." size="44. 12." halign="center" valign="top"
 		textsize="6" textfont="GameFontBlack" textcolor="66FF66" text="15:00" />
 
 	<!-- progress bar: track + depleting fill -->
-	<quad pos="2. -20.4." size="38. 1.8." halign="left" valign="top" bgcolor="000000" opacity="0.55" />
-	<quad id="ko_botn_bar" pos="2. -20.4." size="38. 1.8." halign="left" valign="top" bgcolor="66FF66" opacity="0.95" />
+	<quad pos="3. -23.2." size="40. 2.0." halign="left" valign="top" bgcolor="000000" opacity="0.6" />
+	<quad id="ko_botn_bar" pos="3. -23.2." size="40. 2.0." halign="left" valign="top" bgcolor="66FF66" opacity="0.95" />
 </frame>
 
 <script><!--
@@ -25,7 +31,7 @@ main() {
 	declare Integer Total = {{ ms }};
 	if (Total <= 0) Total = 1;
 	declare Integer EndsAt = Now + Total;
-	declare Real FullW = 38.0;
+	declare Real FullW = 40.0;
 	while (True) {
 		yield;
 		declare Integer Left = EndsAt - Now;
@@ -58,7 +64,7 @@ main() {
 		CdNum.SetText(T);
 		CdNum.TextColor = Col;
 		declare Real Ratio = Left * 1.0 / Total;
-		CdBar.Size = <FullW * Ratio, 1.8>;
+		CdBar.Size = <FullW * Ratio, 2.0>;
 		CdBar.BgColor = Col;
 	}
 }

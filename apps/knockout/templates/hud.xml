@@ -1,4 +1,4 @@
-<frame pos="-159. 40." z-index="0">
+<frame pos="-159. 33." z-index="0">
 	<quad pos="0. 0." size="{{ bg_width }}. {{ bg_height }}." halign="left" valign="top"
 		style="Bgs1InRace" substyle="BgCardSystem" opacity="0.88" />
 

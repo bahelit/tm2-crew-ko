@@ -345,9 +345,7 @@ class BotnController:
 			total = 900
 		await self._run_countdown(total, fastest_txt)
 
-		if settings:
-			await self._apply_knockout_settings(settings)
-		await self._load_script(KNOCKOUT_SCRIPT)
+		await self._switch_to_knockout(settings)
 		self.phase = 'knockout'
 		await self.instance.chat('$09f>>> $fffBowl of the Night$09f knockout is GO!')
 
@@ -429,17 +427,67 @@ class BotnController:
 		except Exception:
 			logger.exception('Knockout: BOTN failed to load script %s', script)
 
-	async def _apply_knockout_settings(self, settings):
+	async def _switch_to_knockout(self, settings):
+		"""Hand the daily map from TimeAttack practice into the Knockout, making sure the
+		staged knockout settings -- notably the warm-up lap count -- are actually in place
+		before the mode reads them.
+
+		The handoff is a race: set_next_script + RestartMap loads the knockout, whose
+		Match_StartMap calls MB_WarmUp(S_WarmUpNb, ...). Staging the settings as "next"
+		alone proved unreliable -- they could land just after the warm-up count was read,
+		giving zero warm-up laps. So we (1) stage them for the load, (2) switch + restart,
+		then (3) once the knockout is confirmed live, push them straight onto the running
+		script. The mode reads the warm-up count only after a short "New match" settle at
+		map start, so this second push lands in time. See Knockout.Script.txt."""
+		if settings:
+			await self._apply_knockout_settings(settings, stage=True)
+		await self._load_script(KNOCKOUT_SCRIPT)
+		if settings and await self._await_script(KNOCKOUT_SCRIPT):
+			await self._apply_knockout_settings(settings, stage=False)
+
+	async def _await_script(self, script, timeout=8.0, interval=0.25):
+		"""Poll (bounded) until ``script`` is the running mode script. Returns True once it
+		matches, False on timeout -- so a stuck switch degrades to 'no re-apply' rather
+		than hanging the handoff."""
+		name = script.lower().rsplit('/', 1)[-1].split('.')[0]   # e.g. 'knockout'
+		deadline = time.time() + timeout
+		while time.time() < deadline:
+			if name in (await self._current_script()).lower():
+				return True
+			await asyncio.sleep(interval)
+		logger.warning(
+			'Knockout: BOTN %s did not load within %ss; warm-up settings may not apply',
+			script, timeout)
+		return False
+
+	async def _current_script(self, refresh=True):
+		"""Current mode script name (live query when supported), or '' on error."""
 		mm = self.instance.mode_manager
-		# Prefer staging for the next script load; fall back to a direct update.
-		fn = getattr(mm, 'update_next_settings', None)
 		try:
-			if fn is not None:
-				await fn(settings)
-			else:
-				await mm.update_settings(settings)
+			return (await mm.get_current_script(refresh=refresh)) or ''
+		except TypeError:
+			try:
+				return (await mm.get_current_script()) or ''
+			except Exception:
+				return ''
 		except Exception:
-			logger.exception('Knockout: BOTN failed to apply knockout settings')
+			return ''
+
+	async def _apply_knockout_settings(self, settings, stage=True):
+		"""Push knockout settings either staged for the next script load (``stage=True``,
+		via ``update_next_settings``) or straight onto the running script (``stage=False``,
+		via ``update_settings``). Staging falls back to a direct update when the host lacks
+		``update_next_settings``."""
+		mm = self.instance.mode_manager
+		try:
+			if stage:
+				fn = getattr(mm, 'update_next_settings', None)
+				if fn is not None:
+					await fn(settings)
+					return
+			await mm.update_settings(settings)
+		except Exception:
+			logger.exception('Knockout: BOTN failed to apply knockout settings (stage=%s)', stage)
 
 	async def _name(self, login):
 		try:

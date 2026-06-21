@@ -287,13 +287,6 @@ Users_SetNbFakeUsers(S_DebugBotsCount, 0);
 
 UpdatePlayerColors();
 
-// Warm-up before the knockout begins. Round mode (-1 time limit) so each warm-up
-// round runs the full map -- one lap on a normal map -- making S_WarmUpNb a count of
-// warm-up laps. 0 skips it (e.g. a BOTN whose TimeAttack practice already served as
-// the warm-up). The PyPlanet app sets S_WarmUpNb per event (BOTN / cup).
-MB_WarmUp(S_WarmUpNb, -1);
-UpdatePlayerColors();
-
 // Each map is a fresh knockout: flag a roster reseed so everyone present at this
 // map's start (including players who joined mid-previous-knockout or after a
 // //skip) is entered. The seed itself runs in ---Rounds_WaitForPlayers--- below,
@@ -306,6 +299,19 @@ G_NewMatch = True;
 if (GetRacingPlayersAmount() <= 1) UIManager.UIAll.BigMessage = _("New match");
 if (!ServerShutdownRequested && !MatchEndRequested) MB_Sleep(3000);
 UIManager.UIAll.BigMessage = "";
+
+// Warm-up before the knockout begins. Round mode (-1 time limit) so each warm-up
+// round runs the full map -- one lap on a normal map -- making S_WarmUpNb a count of
+// warm-up laps. 0 skips it (e.g. a BOTN whose TimeAttack practice already served as
+// the warm-up). The PyPlanet app sets S_WarmUpNb per event (BOTN / cup).
+//
+// Read AFTER the "New match" settle above (not at the top of StartMap): on the BOTN
+// handoff the controller switches into this script and then pushes S_WarmUpNb onto the
+// running mode. That brief pause guarantees the freshly-pushed count is in place before
+// MB_WarmUp reads it -- reading it at the very top raced the push and could give zero
+// warm-up laps. See apps/knockout/botn.py (_switch_to_knockout).
+MB_WarmUp(S_WarmUpNb, -1);
+UpdatePlayerColors();
 ***
 
 // ---------------------------------- //

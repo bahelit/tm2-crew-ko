@@ -169,14 +169,19 @@ class BotnController:
 		"""Enforce the knockout->TimeAttack handoff. on_knockout_recorded queues
 		TimeAttack as the next script, but a queued script alone does not switch the
 		running mode on a normal map rotation -- only a map reload applies it (the
-		practice->knockout handoff uses RestartMap for exactly this reason). So when the
-		post-knockout map opens still running the Knockout script, reload it here in
-		TimeAttack. If the rotation already brought up TimeAttack, this is a no-op."""
+		practice->knockout handoff uses RestartMap for exactly this reason). So when this
+		(the first map after a recorded knockout) opens, reload it in TimeAttack.
+
+		The reload is unconditional rather than gated on a live get_current_script() read:
+		queue_timeattack already set TimeAttack as the *next* script, so a script query at
+		this point can report the queued TimeAttack while the map is in fact still running
+		Knockout -- which would make a 'skip if not knockout' guard bail and leave the map
+		stuck in Knockout (the bug this fixes). Reloading regardless is safe: if TimeAttack
+		is somehow already live it is just a harmless restart of the practice map before
+		anyone has a meaningful run."""
 		if not (self.active and self._force_ta_next_map):
 			return
 		self._force_ta_next_map = False
-		if 'knockout' not in (await self._current_script()).lower():
-			return  # rotation already switched to TimeAttack -- nothing to do
 		# Hold this map open through the practice phase (open-ended limit), then reload it
 		# in TimeAttack. _load_script does set_next_script + RestartMap, whose map reload
 		# is what actually applies the new script.

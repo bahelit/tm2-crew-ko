@@ -1,8 +1,11 @@
 <frame pos="-159. 33." z-index="0">
 	<!-- dark backing panel: sized in the view (bg_width/bg_height) so it always covers
 	     the header + every player row, matching the BOTN countdown's black panels.
-	     Pinned behind the labels with z-index=-1 so it never dims its own text. -->
-	<quad pos="0. 1." size="{{ bg_width }}. {{ bg_height }}." halign="left" valign="top" z-index="-1" bgcolor="000000" opacity="0.8" />
+	     Sits at the frame's base plane (z-index=0) so it stays above the 3D scene yet
+	     behind the labels (z-index=1). A negative z-index here is pushed below the
+	     manialink's composite layer and clipped by the scene -- the countdown's -1
+	     backings only show because its frame sits at z-index=50, not 0. -->
+	<quad pos="0. 1." size="{{ bg_width }}. {{ bg_height }}." halign="left" valign="top" z-index="0" bgcolor="000000" opacity="0.8" />
 
 	<!-- title -->
 	<label pos="{{ center_x }}. -1.3." size="50. 4." halign="center" valign="top" z-index="1"

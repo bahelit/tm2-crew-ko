@@ -30,6 +30,14 @@ logger = logging.getLogger(__name__)
 KNOCKOUT_SCRIPT = 'Modes/TrackMania/Knockout.Script.txt'
 TIMEATTACK_SCRIPT = 'TimeAttack.Script.txt'
 
+# BOTN practice is open-ended: the wall-clock cutoff ends it, not the map's own timer.
+# Stock TimeAttack defaults S_TimeLimit to 300s, so left alone the practice map would
+# auto-advance to the next playlist map every 5 minutes. Setting it to 0 disables that
+# auto-advance (TimeAttack's SetTimeLimit installs no cutoff for a non-positive value),
+# so the same map holds through the whole practice phase until BOTN switches it to the
+# knockout. The server's normal limit is captured before we override and restored on stop.
+PRACTICE_TIMELIMIT = 0
+
 
 # --------------------------------------------------------------------- pure helpers
 
@@ -111,6 +119,7 @@ class BotnController:
 		self.best = {}             # login -> best practice time (ms)
 		self.cutoff_ts = None      # epoch seconds of the cutoff
 		self._task = None          # asyncio waiter for the cutoff
+		self._resting_timelimit = None  # server's normal TA S_TimeLimit, to restore on stop
 		# Countdown-overlay state, so a player who connects mid-countdown can be sent
 		# the overlay with their correct remaining time (the BOTN auto-starts at boot
 		# with nobody connected, so the initial display() reaches no one).
@@ -159,8 +168,12 @@ class BotnController:
 		if 'knockout' in script.lower():
 			self.active, self.phase = True, 'knockout'
 			return
-		# Still in practice (TimeAttack loaded): recompute today's cutoff and re-arm.
+		# Still in practice (TimeAttack loaded): recompute today's cutoff and re-arm. Push
+		# the open-ended time limit onto the running map so the resumed practice holds the
+		# map until the cutoff instead of cycling on the stock 5-minute timer.
 		self.active, self.phase = True, 'practice'
+		await self._capture_resting_timelimit()
+		await self._apply_mode_settings({'S_TimeLimit': PRACTICE_TIMELIMIT}, stage=False)
 		await self._arm_from_setting()
 		await self._arm_practice_overlay()
 		logger.info('Knockout: resumed BOTN practice, cutoff re-armed')
@@ -187,7 +200,7 @@ class BotnController:
 
 		self.best = {}
 		self.active, self.phase = True, 'practice'
-		await self._load_script(TIMEATTACK_SCRIPT)
+		await self._load_practice_script()
 		self._arm_cutoff()
 		await self._arm_practice_overlay()
 		await self.app.commands._refresh_hud_season()
@@ -216,7 +229,9 @@ class BotnController:
 		self.active, self.phase = False, 'idle'
 		self.best = {}
 		await self.app.cup.stop_cup()
-		# Drop the server back to its TimeAttack resting state.
+		# Drop the server back to its TimeAttack resting state, restoring the normal map
+		# time limit we suppressed for the open-ended practice phase.
+		await self._restore_resting_timelimit()
 		await self.app.return_to_timeattack()
 		await self.app.commands._refresh_hud_season()
 		await self.instance.chat('$09f>>> Bowl of the Night stopped.')
@@ -252,7 +267,9 @@ class BotnController:
 		self.best = {}
 		# Queue TimeAttack for the next map WITHOUT a RestartMap: the knockout's map-end
 		# advances the server to the next playlist map on its own, and our queued script
-		# loads with it.
+		# loads with it. Stage the open-ended time limit so the next night's practice map
+		# holds until its cutoff instead of cycling on the stock 5-minute timer.
+		await self._apply_mode_settings({'S_TimeLimit': PRACTICE_TIMELIMIT}, stage=True)
 		await self.app.queue_timeattack()
 		await self._arm_from_setting()
 		await self._arm_practice_overlay()
@@ -427,6 +444,44 @@ class BotnController:
 		except Exception:
 			logger.exception('Knockout: BOTN failed to load script %s', script)
 
+	async def _load_practice_script(self):
+		"""Load TimeAttack for the practice phase with an open-ended time limit so the map
+		holds until the wall-clock cutoff. Mirrors the knockout handoff: capture the normal
+		limit first (to restore on stop), stage the override for the load, switch + restart,
+		then push it live once TimeAttack is up. The mode re-applies the time limit whenever
+		the value changes, so this second push is belt-and-braces against a staging miss."""
+		await self._capture_resting_timelimit()
+		settings = {'S_TimeLimit': PRACTICE_TIMELIMIT}
+		await self._apply_mode_settings(settings, stage=True)
+		await self._load_script(TIMEATTACK_SCRIPT)
+		if await self._await_script(TIMEATTACK_SCRIPT):
+			await self._apply_mode_settings(settings, stage=False)
+
+	async def _capture_resting_timelimit(self):
+		"""Remember the server's normal TimeAttack ``S_TimeLimit`` the first time we override
+		it, so ``stop`` can restore it. Mode settings persist across same-script reloads, so a
+		plain return-to-TimeAttack would otherwise leave practice's open-ended limit in place
+		and the resting server would never cycle maps. A non-positive current value means we
+		are already overriding (e.g. a resumed practice), so there is nothing new to capture."""
+		if self._resting_timelimit is not None:
+			return
+		try:
+			settings = await self.instance.mode_manager.get_settings()
+			raw = settings.get('S_TimeLimit')
+			value = int(raw) if raw is not None else 0
+		except Exception:
+			return
+		if value > 0:
+			self._resting_timelimit = value
+
+	async def _restore_resting_timelimit(self):
+		"""Stage the server's normal TimeAttack time limit for the next load (the caller's
+		return-to-TimeAttack restart applies it), undoing the open-ended practice override."""
+		if self._resting_timelimit is None:
+			return
+		await self._apply_mode_settings({'S_TimeLimit': self._resting_timelimit}, stage=True)
+		self._resting_timelimit = None
+
 	async def _switch_to_knockout(self, settings):
 		"""Hand the daily map from TimeAttack practice into the Knockout, making sure the
 		staged knockout settings -- notably the warm-up lap count -- are actually in place
@@ -440,10 +495,10 @@ class BotnController:
 		script. The mode reads the warm-up count only after a short "New match" settle at
 		map start, so this second push lands in time. See Knockout.Script.txt."""
 		if settings:
-			await self._apply_knockout_settings(settings, stage=True)
+			await self._apply_mode_settings(settings, stage=True)
 		await self._load_script(KNOCKOUT_SCRIPT)
 		if settings and await self._await_script(KNOCKOUT_SCRIPT):
-			await self._apply_knockout_settings(settings, stage=False)
+			await self._apply_mode_settings(settings, stage=False)
 
 	async def _await_script(self, script, timeout=8.0, interval=0.25):
 		"""Poll (bounded) until ``script`` is the running mode script. Returns True once it
@@ -473,11 +528,11 @@ class BotnController:
 		except Exception:
 			return ''
 
-	async def _apply_knockout_settings(self, settings, stage=True):
-		"""Push knockout settings either staged for the next script load (``stage=True``,
-		via ``update_next_settings``) or straight onto the running script (``stage=False``,
-		via ``update_settings``). Staging falls back to a direct update when the host lacks
-		``update_next_settings``."""
+	async def _apply_mode_settings(self, settings, stage=True):
+		"""Push mode-script settings (knockout warm-up, TimeAttack time limit) either staged
+		for the next script load (``stage=True``, via ``update_next_settings``) or straight
+		onto the running script (``stage=False``, via ``update_settings``). Staging falls back
+		to a direct update when the host lacks ``update_next_settings``."""
 		mm = self.instance.mode_manager
 		try:
 			if stage:

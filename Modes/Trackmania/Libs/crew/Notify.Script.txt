@@ -20,17 +20,27 @@
 #Const C_Notify_ChatPrefix "$z$s$fff"
 
 // ---------------------------------- //
-/** Compose a message from a ``[format, args...]`` array using TextLib.
+/** Compose a message from a ``[format, args...]`` array by substituting %1, %2, ...
+ *	with the trailing parts.
  *
- *	@param	_Parts	[format, arg1, arg2, arg3] — only the format is required.
+ *	TextLib's native ``TL::Compose`` only performs the %N substitution when its format
+ *	argument is a compile-time string *literal*; given a runtime value (like an array
+ *	element) it leaves the placeholders untouched and appends the params verbatim --
+ *	the "$<%1$> wins the match!" / name-tacked-on-the-end chat bug. Our formats always
+ *	arrive at runtime in ``_Parts[0]``, so we substitute by hand with ``TL::Replace``,
+ *	exactly as the old domino54 Translations lib did for the same reason.
+ *
+ *	@param	_Parts	[format, arg1, arg2, ...] — only the format is required.
  *	@return			The composed text.
  */
 Text Compose(Text[] _Parts) {
 	if (_Parts.count <= 0) return "";
-	if (_Parts.count == 1) return TL::Compose(_Parts[0]);
-	if (_Parts.count == 2) return TL::Compose(_Parts[0], _Parts[1]);
-	if (_Parts.count == 3) return TL::Compose(_Parts[0], _Parts[1], _Parts[2]);
-	return TL::Compose(_Parts[0], _Parts[1], _Parts[2], _Parts[3]);
+	declare Text Result = _Parts[0];
+	declare Integer I;
+	for (I, 1, _Parts.count - 1) {
+		Result = TL::Replace(Result, "%" ^ I, _Parts[I]);
+	}
+	return Result;
 }
 
 // ---------------------------------- //

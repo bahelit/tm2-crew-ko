@@ -126,6 +126,11 @@ class BotnController:
 		self._overlay_active = False
 		self._overlay_ends = None  # epoch seconds the current countdown ends at
 		self._overlay_header = 'KNOCKOUT IN'
+		# Set when a knockout map has just been recorded: the next map that opens must
+		# come up in TimeAttack. A queued next-script alone is not enough -- a normal
+		# map rotation keeps the running Knockout script -- so on_map_start reloads the
+		# map in TimeAttack if the rotation did not switch it. One-shot.
+		self._force_ta_next_map = False
 
 	async def on_start(self):
 		# Always listen for finishes; the handler ignores them unless we are in the
@@ -136,6 +141,9 @@ class BotnController:
 		# Catch players who connect while a countdown is on screen (notably the BOTN
 		# auto-started at boot, where the first display() reaches nobody).
 		self.app.context.signals.listen(mp_signals.player.player_connect, self.on_player_connect)
+		# Enforce the knockout->TimeAttack handoff on the map that opens after a knockout
+		# (see _force_ta_next_map / on_map_start).
+		self.app.context.signals.listen(mp_signals.map.map_start, self.on_map_start)
 		# Re-arm after a PyPlanet restart if a BOTN cup is still active and we are
 		# back in (or never left) the TimeAttack practice phase.
 		await self._maybe_resume()
@@ -156,6 +164,28 @@ class BotnController:
 			await cd.start(remaining, self._overlay_header, player=player)
 		except Exception:
 			logger.exception('Knockout: BOTN countdown re-send on connect failed')
+
+	async def on_map_start(self, *args, **kwargs):
+		"""Enforce the knockout->TimeAttack handoff. on_knockout_recorded queues
+		TimeAttack as the next script, but a queued script alone does not switch the
+		running mode on a normal map rotation -- only a map reload applies it (the
+		practice->knockout handoff uses RestartMap for exactly this reason). So when the
+		post-knockout map opens still running the Knockout script, reload it here in
+		TimeAttack. If the rotation already brought up TimeAttack, this is a no-op."""
+		if not (self.active and self._force_ta_next_map):
+			return
+		self._force_ta_next_map = False
+		if 'knockout' not in (await self._current_script()).lower():
+			return  # rotation already switched to TimeAttack -- nothing to do
+		# Hold this map open through the practice phase (open-ended limit), then reload it
+		# in TimeAttack. _load_script does set_next_script + RestartMap, whose map reload
+		# is what actually applies the new script.
+		settings = {'S_TimeLimit': PRACTICE_TIMELIMIT}
+		await self._apply_mode_settings(settings, stage=True)
+		await self._load_script(TIMEATTACK_SCRIPT)
+		if await self._await_script(TIMEATTACK_SCRIPT):
+			await self._apply_mode_settings(settings, stage=False)
+		logger.info('Knockout: BOTN forced TimeAttack on the post-knockout map')
 
 	async def _maybe_resume(self):
 		cup = getattr(self.app.cup, 'active_cup', None)
@@ -271,6 +301,9 @@ class BotnController:
 		# holds until its cutoff instead of cycling on the stock 5-minute timer.
 		await self._apply_mode_settings({'S_TimeLimit': PRACTICE_TIMELIMIT}, stage=True)
 		await self.app.queue_timeattack()
+		# Belt-and-braces: a queued next-script does not switch the running mode on a
+		# plain map rotation, so enforce the switch when the next map opens.
+		self._force_ta_next_map = True
 		await self._arm_from_setting()
 		await self._arm_practice_overlay()
 		when = datetime.fromtimestamp(self.cutoff_ts).strftime('%H:%M') if self.cutoff_ts else '—'

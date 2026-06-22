@@ -262,7 +262,7 @@ class KnockoutConfig(AppConfig):
 		self.finish_countdown = FinishCountdown(self)
 
 		# Right-side countdown, armed by the BotnController for the whole Bowl of the
-		# Night: "PRACTICE ENDS IN" to the cutoff, then "KNOCKOUT IN" through the handoff.
+		# Night: "PRACTICE ENDS IN" to the cutoff, then "STARTING IN" through the handoff.
 		self.botn_countdown = BotnCountdown(self)
 
 		# Bottom centre-right rolling feed of checkpoint splits, driven by the

@@ -59,6 +59,9 @@ class LiveController:
 		# show the column (with zeros) from the first map, before any map is recorded.
 		self.season_points = {}
 		self.cup_active = False
+		# True when the active cup is a Bowl of the Night, so the HUD can show the
+		# "BOWL OF THE NIGHT" title instead of the generic "MATCH n".
+		self.is_botn = False
 		# Seconds the mode gives stragglers to finish after the first finisher
 		# (S_FinishCountdown), read at map start. The finish-countdown overlay is
 		# armed once per round on the first finish; this flag prevents re-arming.
@@ -168,8 +171,10 @@ class LiveController:
 		if not cup:
 			self.season_points = {}
 			self.cup_active = False
+			self.is_botn = False
 			return
 		self.cup_active = True
+		self.is_botn = (getattr(cup, 'cup_key', None) == 'botn')
 		try:
 			standings = await self.app.results.compute_standings(cup)
 			self.season_points = {row['login']: row['cup_points'] for row in standings}

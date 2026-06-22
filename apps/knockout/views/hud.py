@@ -23,6 +23,9 @@ GREEN = '66FF66'      # safe times: the leader's absolute time and the gaps behi
 BUBBLE = 'FFCC00'     # the last safe time, one spot above the cut line
 DIM = 'AAAAAA'        # no time yet / gap marker
 
+# Title shown in place of "MATCH n" when the live event is a Bowl of the Night.
+BOTN_TITLE = 'BOWL OF THE NIGHT'
+
 
 class MatchHud(TemplateView):
 	"""
@@ -83,7 +86,10 @@ class MatchHud(TemplateView):
 			await self.hide()
 			return
 
-		self.match_text = match_label(getattr(live, 'match_number', 0))
+		if getattr(live, 'is_botn', False):
+			self.match_text = BOTN_TITLE
+		else:
+			self.match_text = match_label(getattr(live, 'match_number', 0))
 		self.round_text = round_value(getattr(live, 'round', 0), getattr(live, 'total_rounds', 0))
 		danger = set(live.danger_logins())
 

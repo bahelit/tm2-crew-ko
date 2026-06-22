@@ -5,7 +5,7 @@ class BotnCountdown(TemplateView):
 	"""
 	Right-side countdown shown to everyone during a Bowl of the Night. It is armed
 	for the whole event: "PRACTICE ENDS IN" while practice runs down to the cutoff,
-	then "KNOCKOUT IN" through the short handoff window before the knockout loads.
+	then "STARTING IN" through the short handoff window before the knockout loads.
 	The seconds tick client-side (embedded ManiaScript), so it stays smooth without
 	a server refresh every frame -- the BotnController only (re)shows it when the
 	target or header changes and hides it when the knockout starts (or the BOTN is
@@ -21,7 +21,7 @@ class BotnCountdown(TemplateView):
 		self.manager = app.context.ui
 		self.id = 'knockout__botn_countdown'
 		self.seconds = 900
-		self.header = 'KNOCKOUT IN'
+		self.header = 'STARTING IN'
 
 	async def get_context_data(self):
 		data = await super().get_context_data()
@@ -32,14 +32,14 @@ class BotnCountdown(TemplateView):
 		data['header'] = self.header
 		return data
 
-	async def start(self, seconds, header='KNOCKOUT IN', player=None):
+	async def start(self, seconds, header='STARTING IN', player=None):
 		"""(Re)arm and display the countdown for ``seconds`` seconds under ``header``.
 
 		With ``player`` set, send only to that player (used to catch a late joiner up
 		with their remaining time without resetting everyone else's running clock);
 		otherwise display to everyone currently connected."""
 		self.seconds = max(1, int(seconds or 0))
-		self.header = header or 'KNOCKOUT IN'
+		self.header = header or 'STARTING IN'
 		if player is not None:
 			await self.display(player=player)
 		else:

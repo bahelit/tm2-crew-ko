@@ -11,7 +11,7 @@ the cycle continues. Because ManiaScript has no wall-clock access, all timing li
 here in Python.
 
 A right-side overlay counts down the whole time: "PRACTICE ENDS IN" to the cutoff
-during practice, then "KNOCKOUT IN" through the short handoff window before the
+during practice, then "STARTING IN" through the short handoff window before the
 knockout loads.
 
 BOTN re-creates TrackMania 2020's Cup of the Day: a plain knockout with **no shields**.
@@ -125,7 +125,7 @@ class BotnController:
 		# with nobody connected, so the initial display() reaches no one).
 		self._overlay_active = False
 		self._overlay_ends = None  # epoch seconds the current countdown ends at
-		self._overlay_header = 'KNOCKOUT IN'
+		self._overlay_header = 'STARTING IN'
 		# Set when a knockout map has just been recorded: the next map that opens must
 		# come up in TimeAttack. A queued next-script alone is not enough -- a normal
 		# map rotation keeps the running Knockout script -- so on_map_start reloads the
@@ -407,11 +407,11 @@ class BotnController:
 	async def _run_countdown(self, total, fastest_txt):
 		"""Announce the knockout start, then re-announce at each COUNTDOWN_MARK below
 		the total, sleeping the remainder before the handoff. The right-side overlay
-		switches to "KNOCKOUT IN" and ticks the same countdown client-side."""
+		switches to "STARTING IN" and ticks the same countdown client-side."""
 		await self.instance.chat(
 			'$09f>>> Practice closed — fastest: $fff{}$09f. Knockout in $fff{}$09f!'.format(
 				fastest_txt, human_duration(total)))
-		await self._show_countdown_overlay(total, 'KNOCKOUT IN')
+		await self._show_countdown_overlay(total, 'STARTING IN')
 		try:
 			remaining = total
 			for mark in COUNTDOWN_MARKS:

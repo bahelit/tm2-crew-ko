@@ -300,15 +300,26 @@ class BotnController:
 
 		self.phase = 'practice'
 		self.best = {}
-		# Queue TimeAttack for the next map WITHOUT a RestartMap: the knockout's map-end
-		# advances the server to the next playlist map on its own, and our queued script
-		# loads with it. Stage the open-ended time limit so the next night's practice map
-		# holds until its cutoff instead of cycling on the stock 5-minute timer.
+		# Stage the open-ended time limit so the next night's practice map holds until its
+		# cutoff instead of cycling on the stock 5-minute TimeAttack timer.
 		await self._apply_mode_settings({'S_TimeLimit': PRACTICE_TIMELIMIT}, stage=True)
-		await self.app.queue_timeattack()
-		# Belt-and-braces: a queued next-script does not switch the running mode on a
-		# plain map rotation, so enforce the switch when the next map opens.
-		self._force_ta_next_map = True
+		if self.app.playlist_length() <= 1:
+			# Single-map playlist: there is no real rotation, so the mode loops a fresh
+			# knockout on the *same* map without firing a map_start. The _force_ta_next_map
+			# hook below would then never run and the knockout would replay (the reported
+			# bug). Force the switch to TimeAttack now via the proven RestartMap reload, then
+			# push the open-ended limit straight onto the running script.
+			await self._load_script(TIMEATTACK_SCRIPT)
+			if await self._await_script(TIMEATTACK_SCRIPT):
+				await self._apply_mode_settings({'S_TimeLimit': PRACTICE_TIMELIMIT}, stage=False)
+		else:
+			# Multi-map playlist: queue TimeAttack for the next map WITHOUT a RestartMap so
+			# the knockout's map-end advances to the next playlist map on its own (one map
+			# per night) and our queued script loads with it. A queued next-script alone does
+			# not switch the running mode on a plain rotation, so enforce the switch when the
+			# next map opens.
+			await self.app.queue_timeattack()
+			self._force_ta_next_map = True
 		await self._arm_from_setting()
 		await self._arm_practice_overlay()
 		when = datetime.fromtimestamp(self.cutoff_ts).strftime('%H:%M') if self.cutoff_ts else '—'

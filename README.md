@@ -43,33 +43,49 @@ controllers live under `controllers/`.
 
 ---
 
+## Where configuration lives
+
+This is **two programs**, so configuration lives in two places — plus a third for
+the day-to-day knobs. Knowing which is which removes most of the confusion:
+
+| # | Place | File | What it holds |
+|---|---|---|---|
+| 1 | **Dedicated server** | `UserData/Config/<your>.xml` | Server identity: name, ports, passwords, master account. The TM2 dedicated server reads this; PyPlanet does not. |
+| 2 | **PyPlanet controller** | `settings/base.py` + `settings/apps.py` | How PyPlanet connects to the dedicated, the database, the app list, and the pinned boot mode (`KNOCKOUT_STARTUP_MODE`). See `pyplanet_settings_example.py`. |
+| 3 | **App settings (live)** | the database, via `//settings` | Every knockout/BOTN knob — cutoff time, HUD toggles, payouts, … Changed in-game, no restart. See [Configuration](#configuration). |
+
+**The one link between #1 and #2:** PyPlanet's `DEDICATED` block in `settings/base.py`
+must point at the dedicated's **XML-RPC port** (the `<xmlrpc_port>`, usually `5000` —
+*not* the game's `<server_port>`, e.g. `2350`) and use the **SuperAdmin** password
+from the dedicated config. Get those two right and the rest just works.
+
+---
+
 ## Install
 
-### PyPlanet app
-1. Copy `apps/knockout/` into your PyPlanet project's `apps/` directory.
-2. Add it to your `APPS` list (Python settings `settings/apps.py`, or YAML):
-   ```python
-   APPS = {
-       'default': [
-           # ... core + contrib apps ...
-           'apps.knockout',
-       ]
-   }
-   ```
-3. Restart PyPlanet. The `knockout_*` tables are auto-created on first start.
-
-### Game mode
+### 1. Dedicated server (the game host)
 1. Copy `Modes/Trackmania/Knockout.Script.txt` and `Modes/Trackmania/Libs/crew/`
-   into your dedicated server's `Scripts/` tree (so the paths resolve to
+   into the dedicated server's `Scripts/` tree (so the paths resolve to
    `Scripts/Modes/TrackMania/Knockout.Script.txt` and
    `Scripts/Libs/crew/Notify.Script.txt`).
-2. Set the mode in the playlist / matchsettings XML.
-3. Do **not** set `S_UseLegacyXmlRpcCallbacks` — PyPlanet forces it to `0`, and
+2. In `UserData/Config/<your>.xml`, make sure XML-RPC is enabled and note the
+   `<xmlrpc_port>` and the `SuperAdmin` password — PyPlanet needs both.
+3. Set the mode in the playlist / matchsettings XML.
+4. Do **not** set `S_UseLegacyXmlRpcCallbacks` — PyPlanet forces it to `0`, and
    the mode's callbacks are built for that.
 
 > The `Modes/Trackmania/Base/` scripts (`RoundsBase2`, `ModeTrackmania`,
 > `ModeBase2`, `ModeBase`) are shipped only for review — they are provided by the
 > server install; the title pack does not redistribute the stock `Libs/Nadeo/*`.
+
+### 2. PyPlanet controller (the app)
+1. Copy `apps/knockout/` into your PyPlanet project's `apps/` directory.
+2. Configure `settings/base.py` and `settings/apps.py` — copy the blocks from
+   `pyplanet_settings_example.py`:
+   - point `DEDICATED` at the dedicated's XML-RPC port + SuperAdmin password,
+   - add `'apps.knockout'` to your `APPS` list,
+   - set `KNOCKOUT_STARTUP_MODE` to the mode you want on boot (see below).
+3. Restart PyPlanet. The `knockout_*` tables are auto-created on first start.
 
 ---
 
@@ -91,15 +107,11 @@ set it once and the server comes up ready to play.
 settings file **wins** over the live `startup_mode` setting, so the boot mode can
 be pinned in config for launch-and-play:
 
-- **Settings file** (recommended for launch-and-play):
-  - Python settings (`settings/base.py` or `settings/local.py`):
-    ```python
-    KNOCKOUT_STARTUP_MODE = 'botn'   # 'knockout' | 'botn' | 'none'
-    ```
-  - YAML settings (`settings/base.yaml`):
-    ```yaml
-    KNOCKOUT_STARTUP_MODE: botn
-    ```
+- **Settings file** (recommended for launch-and-play) — in `settings/base.py`
+  (or `settings/local.py`):
+  ```python
+  KNOCKOUT_STARTUP_MODE = 'botn'   # 'knockout' | 'botn' | 'none'
+  ```
 - **Live setting** (`//settings`): set `startup_mode` to `none` / `knockout` /
   `botn`. Used only when the file key is absent. Read once at boot, so it takes
   effect on the next controller start.
@@ -140,9 +152,7 @@ single weekly cup (`cup_key = botn`) sized to the playlist length:
 3. At the cutoff the fastest practice time is recorded (for the announcement only).
 4. After the `botn_countdown_seconds` handoff window the app switches the **same
    map** to Knockout. The knockout runs `botn_warmup_laps` **warm-up laps**, then
-   plays to a winner — which records into the weekly `botn` cup. BOTN re-creates
-   TM2020's **Cup of the Day**: a plain knockout with **no shields** (shields are
-   forced off; they stay available to the Friday knockout cup — see below).
+   plays to a winner — which records into the weekly `botn` cup.
 5. When the knockout ends, the server **advances to the next playlist map** back in
    **TimeAttack**, and the cutoff re-arms for the next night. After the last map the
    weekly cup completes (crowning the week's champion) and a fresh weekly cup opens
@@ -187,9 +197,11 @@ Because ManiaScript has no wall clock, all BOTN timing lives in Python.
 
 ## Configuration
 
-All options below are PyPlanet settings, tunable live with `//settings` (stored in
-the database). The one exception is the boot mode, which can also be pinned in the
-settings file via `KNOCKOUT_STARTUP_MODE` (see [Startup &amp; modes](#startup--modes)).
+These are the **app's own settings** — place #3 in
+[Where configuration lives](#where-configuration-lives). All of them are tunable
+**live** in-game with `//settings` (stored in the database, no restart). The one
+exception is the boot mode, which can also be pinned in the settings file via
+`KNOCKOUT_STARTUP_MODE` (see [Startup &amp; modes](#startup--modes)).
 
 ### Startup
 | Setting | Default | Description |

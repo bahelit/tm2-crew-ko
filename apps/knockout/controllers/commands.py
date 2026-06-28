@@ -263,7 +263,8 @@ class CupCommands:
 		if results is None:
 			await self.instance.chat('$bbb>>> Cup results are not available yet.', player)
 			return
-		await results.show(player)
+		cup = self.cup.active_cup or await self.cup.last_cup()
+		await results.show(player, cup=cup)
 
 	async def cmd_matches(self, player, data, **kwargs):
 		cup = self.cup.active_cup or await self.cup.last_cup()

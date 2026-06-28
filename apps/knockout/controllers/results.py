@@ -61,7 +61,10 @@ class ResultsController:
 		return standings
 
 	async def show(self, player, cup=None):
-		cup = cup or self.app.cup.active_cup
+		if cup is None:
+			cup = self.app.cup.active_cup
+		if cup is None:
+			cup = await self.app.cup.last_cup()
 		if cup is None:
 			await self.instance.chat('$bbb>>> No cup to show results for.', player)
 			return

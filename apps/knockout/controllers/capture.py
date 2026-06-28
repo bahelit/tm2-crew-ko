@@ -1,8 +1,10 @@
+import asyncio
 import logging
-import time
+from collections import deque
 
 from pyplanet.apps.core.maniaplanet import callbacks as mp_signals
 
+from ..match_ids import allocate_match_start_time, dequeue_match_start_time
 from ..models import MatchInfo, PlayerScore
 from ..callbacks import parse_standings, register
 
@@ -28,6 +30,10 @@ class CaptureController:
 		self.app = app
 		self.instance = app.instance
 		self._match_start_time = None
+		# One id per map_start, consumed FIFO by KOMatchStandings so a fast map
+		# rotation cannot overwrite the id before the previous map is recorded.
+		self._match_start_queue = deque()
+		self._last_match_id = 0
 		self._standings_signal = None
 		self._captured = set()
 
@@ -38,7 +44,10 @@ class CaptureController:
 
 	async def on_map_start(self, *args, **kwargs):
 		# Allocate a stable identifier for the match that is about to be played.
-		self._match_start_time = int(time.time())
+		match_id = allocate_match_start_time(self._last_match_id)
+		self._last_match_id = match_id
+		self._match_start_time = match_id
+		self._match_start_queue.append(match_id)
 
 	async def on_standings(self, standings=None, **kwargs):
 		if not standings:
@@ -47,7 +56,13 @@ class CaptureController:
 		await self.record_match(standings)
 
 	async def record_match(self, standings):
-		start_time = self._match_start_time or int(time.time())
+		# Arm the BOTN / cup TimeAttack handoff before the first await: the mode can
+		# advance to the next map (and fire map_start) while we yield on DB I/O.
+		self._arm_ta_handoff_if_needed()
+
+		start_time = dequeue_match_start_time(self._match_start_queue, self._last_match_id)
+		if start_time > self._last_match_id:
+			self._last_match_id = start_time
 		if start_time in self._captured:
 			return
 
@@ -93,3 +108,22 @@ class CaptureController:
 		# Hand off to cup logic (no-op until a cup is active, Phase 3).
 		if hasattr(self.app, 'on_match_recorded'):
 			await self.app.on_match_recorded(start_time, standings)
+
+	def _arm_ta_handoff_if_needed(self):
+		"""Queue TimeAttack for the upcoming map rotation without yielding."""
+		botn = getattr(self.app, 'botn', None)
+		if botn is not None and botn.active and botn.phase == 'knockout':
+			botn.arm_handoff_immediately()
+			asyncio.ensure_future(self.app.queue_timeattack())
+			return
+		cup = getattr(getattr(self.app, 'cup', None), 'active_cup', None)
+		if cup is None:
+			return
+		target = cup.map_count
+		if not target:
+			return
+		# Last map of a fixed-length cup: same rotation race as BOTN. ``_captured``
+		# holds all maps already recorded; this standings event is for the next one.
+		if len(self._captured) >= target - 1:
+			self.app.arm_cup_handoff_immediately()
+			asyncio.ensure_future(self.app.queue_timeattack())

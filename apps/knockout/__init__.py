@@ -1,6 +1,7 @@
 import logging
 
 from pyplanet.apps.config import AppConfig
+from pyplanet.apps.core.maniaplanet import callbacks as mp_signals
 from pyplanet.contrib.setting import Setting
 
 from .controllers.capture import CaptureController
@@ -213,6 +214,11 @@ class KnockoutConfig(AppConfig):
 		)
 
 	async def on_start(self):
+		# One-shot: force the next map to load in TimeAttack after a fixed-length cup
+		# completes (Friday cup). BOTN uses botn._force_ta_next_map instead.
+		self._force_ta_cup_next_map = False
+		self.context.signals.listen(mp_signals.map.map_start, self._on_cup_map_start_handoff)
+
 		# PyPlanet's jinja loader caches its app->templates mapping once and never
 		# picks up apps loaded later via a mode change. BOTN switches modes, which
 		# reloads mode-gated contrib apps (e.g. live_rankings) after that cache is
@@ -229,7 +235,9 @@ class KnockoutConfig(AppConfig):
 		self._match_winner = None
 
 		# Cup presets (names / mode presets / payouts) from the configured file.
-		presets_path = await self.setting_cup_presets_path.get_value()
+		presets_path = self._settings_file_cup_presets_path()
+		if not presets_path:
+			presets_path = await self.setting_cup_presets_path.get_value()
 		self.presets = PresetConfig(presets_path or None)
 		self.presets.load()
 
@@ -356,6 +364,20 @@ class KnockoutConfig(AppConfig):
 		value = str(raw).strip().lower()
 		return value or None
 
+	@staticmethod
+	def _settings_file_cup_presets_path():
+		"""Read ``KNOCKOUT_CUP_PRESETS_PATH`` from the PyPlanet settings module, or None
+		if unset. The live ``cup_presets_path`` setting (//settings) wins when this is absent."""
+		try:
+			from pyplanet.conf import settings as pp_settings
+			raw = getattr(pp_settings, 'KNOCKOUT_CUP_PRESETS_PATH', None)
+		except Exception:
+			return None
+		if raw is None:
+			return None
+		value = str(raw).strip()
+		return value or None
+
 	async def return_to_timeattack(self):
 		"""Drop the server back to its TimeAttack resting state (next-map switch +
 		RestartMap so it takes effect on the current map)."""
@@ -364,6 +386,18 @@ class KnockoutConfig(AppConfig):
 			await self.instance.gbx('RestartMap')
 		except Exception:
 			logger.exception('Knockout: failed to return to TimeAttack')
+
+	def arm_cup_handoff_immediately(self):
+		"""Set the cup handoff flag synchronously (see capture.record_match)."""
+		self._force_ta_cup_next_map = True
+
+	async def _on_cup_map_start_handoff(self, *args, **kwargs):
+		"""Reload the post-cup map in TimeAttack when a queued script alone did not."""
+		if not self._force_ta_cup_next_map:
+			return
+		self._force_ta_cup_next_map = False
+		await self.return_to_timeattack()
+		logger.info('Knockout: forced TimeAttack on the post-cup map')
 
 	async def queue_timeattack(self):
 		"""Queue TimeAttack for the NEXT map without restarting the current one. Used
@@ -411,8 +445,9 @@ class KnockoutConfig(AppConfig):
 		await self.hide_widget()
 		# The cup just completed on its final knockout map; drop back to TimeAttack for
 		# the next map so the server doesn't keep cycling knockout after the cup is done.
-		# (For a BOTN weekly cup the BOTN controller re-opens a fresh cup right after and
-		# re-queues TimeAttack itself, so this is harmless there.)
+		# capture.record_match usually arms this before the first await; repeat here in
+		# case standings were processed without passing through capture.
+		self.arm_cup_handoff_immediately()
 		await self.queue_timeattack()
 
 	async def update_widget(self):

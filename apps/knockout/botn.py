@@ -132,6 +132,10 @@ class BotnController:
 		# map in TimeAttack if the rotation did not switch it. One-shot.
 		self._force_ta_next_map = False
 
+	def arm_handoff_immediately(self):
+		"""Set the one-shot flag synchronously so map_start cannot win the race."""
+		self._force_ta_next_map = True
+
 	async def on_start(self):
 		# Always listen for finishes; the handler ignores them unless we are in the
 		# practice phase, so this is cheap when no BOTN is running.

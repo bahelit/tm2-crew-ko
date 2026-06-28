@@ -59,6 +59,7 @@ class LiveController:
 		# show the column (with zeros) from the first map, before any map is recorded.
 		self.season_points = {}
 		self.cup_active = False
+		self.cup_name = ''
 		# True when the active cup is a Bowl of the Night, so the HUD can show the
 		# "BOWL OF THE NIGHT" title instead of the generic "MATCH n".
 		self.is_botn = False
@@ -171,9 +172,11 @@ class LiveController:
 		if not cup:
 			self.season_points = {}
 			self.cup_active = False
+			self.cup_name = ''
 			self.is_botn = False
 			return
 		self.cup_active = True
+		self.cup_name = getattr(cup, 'name', '') or ''
 		self.is_botn = (getattr(cup, 'cup_key', None) == 'botn')
 		try:
 			standings = await self.app.results.compute_standings(cup)
@@ -411,6 +414,21 @@ class LiveController:
 
 	# --------------------------------------------------------------- helpers
 
+	async def _match_hud_enabled(self):
+		"""Match HUD is on by default; cup/BOTN events keep it on even if the global
+		toggle is off, so the CotD-style leaderboard is always visible during events."""
+		try:
+			if await self.app.setting_show_match_hud.get_value():
+				return True
+		except Exception:
+			pass
+		if self.cup_active:
+			return True
+		botn = getattr(self.app, 'botn', None)
+		if botn and botn.active:
+			return True
+		return False
+
 	async def _refresh_overlays(self):
 		# Broadcast ticker (stream overlays, opt-in) and the always-on match HUD
 		# are gated independently; refresh whichever is enabled.
@@ -421,16 +439,9 @@ class LiveController:
 			except Exception:
 				logger.exception('Knockout: failed to refresh live ticker')
 
-		# The match HUD is on by default. Gate it on the LIVE setting value rather
-		# than a cached flag, so setting show_match_hud (or starting up with it on)
-		# always takes effect immediately -- no app reload, no stale-cache footgun.
-		# A failed read defaults to on so a transient error never hides the HUD.
 		hud = getattr(self.app, 'hud', None)
 		if hud is not None:
-			try:
-				hud_enabled = await self.app.setting_show_match_hud.get_value()
-			except Exception:
-				hud_enabled = True
+			hud_enabled = await self._match_hud_enabled()
 			# Keep the cached flag in sync purely for the //ko hud diagnostic.
 			self.app._match_hud_enabled = hud_enabled
 			if hud_enabled:
@@ -456,10 +467,7 @@ class LiveController:
 		if view is None:
 			return
 		live_round = self.round > 0 and self.phase in ('racing', 'showdown')
-		try:
-			enabled = await self.app.setting_show_match_hud.get_value()
-		except Exception:
-			enabled = True
+		enabled = await self._match_hud_enabled()
 		try:
 			if enabled and live_round and self.cp_feed:
 				await view.refresh(self.cp_feed)
@@ -474,7 +482,7 @@ class LiveController:
 		if view is None:
 			return
 		try:
-			if await self.app.setting_show_match_hud.get_value():
+			if await self._match_hud_enabled():
 				await view.start(self._finish_seconds)
 		except Exception:
 			logger.exception('Knockout: failed to show finish countdown')

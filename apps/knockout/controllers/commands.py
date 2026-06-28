@@ -27,6 +27,8 @@ class CupCommands:
 				.add_param(name='name', required=False, nargs='*', help='Display name (optional).'),
 			Command(command='off', namespace='cup', target=self.cmd_off, admin=True,
 				description='Stop the active cup.'),
+			Command(command='end', namespace='cup', target=self.cmd_end, admin=True,
+				description='End the active cup now (announce results, same as auto-complete).'),
 			Command(command='mapcount', namespace='cup', target=self.cmd_mapcount, admin=True,
 				description='Set the number of maps in the cup (0 = open-ended, "all" = whole playlist).')
 				.add_param(name='count', required=True),
@@ -131,6 +133,18 @@ class CupCommands:
 			await self.app.return_to_timeattack()
 		else:
 			await self.instance.chat('$f00>>> No active cup.', player)
+
+	async def cmd_end(self, player, data, **kwargs):
+		"""Force-complete the active cup (e.g. when auto-complete did not fire)."""
+		cup = self.cup.active_cup
+		if not cup:
+			await self.instance.chat('$f00>>> No active cup.', player)
+			return
+		await self.instance.chat(
+			'$ff0>>> $fff{}$ff0 is ending the cup $fff{}$ff0.'.format(player.nickname, cup.name))
+		await self.cup.complete_cup()
+		await self.app.hide_widget()
+		await self._refresh_hud_season()
 
 	async def cmd_mapcount(self, player, data, **kwargs):
 		# 'all' (or a negative count) spans the whole current playlist.

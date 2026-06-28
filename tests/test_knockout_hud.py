@@ -106,6 +106,20 @@ def test_ml_num_avoids_broken_size_syntax():
 	assert hud.ml_num(27.5) == 27.5
 
 
+def test_hud_applies():
+	assert hud.hud_applies(True, False) is True
+	assert hud.hud_applies(False, True) is True
+	assert hud.hud_applies(False, False) is False
+
+
+def test_is_practice_phase():
+	assert hud.is_practice_phase(False, True) is True
+	assert hud.is_practice_phase(True, True) is False
+	assert hud.is_practice_phase(False, False, botn_active=True, botn_phase='practice') is True
+	assert hud.is_practice_phase(False, False, botn_active=True, botn_phase='knockout') is False
+	assert hud.is_practice_phase(False, True, botn_active=True, botn_phase='countdown') is True
+
+
 def test_ko_per_round_label():
 	# Double-knockout active and field still above the threshold.
 	assert hud.ko_per_round_label(8, 14) == '2 UNTIL 8 PLAYERS'

@@ -2,7 +2,7 @@ from pyplanet.views.template import TemplateView
 
 from ..hud_format import (
 	format_race_time, format_gap, match_label, round_value, ko_per_round_label,
-	ml_num,
+	hud_applies, is_practice_phase, ml_num,
 )
 
 # Layout mirrors the BOTN countdown: a title tab (TITLE_H) then a body panel.
@@ -90,29 +90,45 @@ class MatchHud(TemplateView):
 		server with their best lap so far; once rounds start it switches to the live
 		running order with elimination highlighting. It only hides when the loaded
 		mode is not Knockout, or when nobody is on the server to show."""
-		if not getattr(live, 'is_knockout', True):
+		cup_active = getattr(live, 'cup_active', False)
+		is_knockout = getattr(live, 'is_knockout', True)
+		if not hud_applies(is_knockout, cup_active):
 			await self.hide()
 			return
+
+		botn = getattr(self.app, 'botn', None)
+		botn_active = bool(botn and botn.active)
+		botn_phase = getattr(botn, 'phase', 'idle') if botn else 'idle'
+		practice = is_practice_phase(
+			is_knockout, cup_active, botn_active=botn_active, botn_phase=botn_phase)
 
 		if getattr(live, 'is_botn', False):
 			self.match_text = BOTN_TITLE
 			# Long title needs a smaller font so it fits the tab without bleeding
 			# into the stats block below.
 			self.title_textsize = '1.5'
+		elif cup_active:
+			# Cup-of-the-day style: show the cup name while a cup is running.
+			self.match_text = (getattr(live, 'cup_name', None) or 'CUP').upper()
+			name_len = len(self.match_text)
+			self.title_textsize = '1.5' if name_len > 14 else '2'
 		else:
 			self.match_text = match_label(getattr(live, 'match_number', 0))
 			self.title_textsize = '2'
-		self.round_text = round_value(getattr(live, 'round', 0), getattr(live, 'total_rounds', 0))
-		danger = set(live.danger_logins())
+		if practice:
+			self.round_text = 'PRACTICE'
+		else:
+			self.round_text = round_value(getattr(live, 'round', 0), getattr(live, 'total_rounds', 0))
+		danger = set() if practice else set(live.danger_logins())
 
 		# Points column (running cup total) shows whenever a cup is active and the
 		# setting is on -- from map 1, with zeros, before any map is recorded.
 		season = getattr(live, 'season_points', None) or {}
-		cup_active = getattr(live, 'cup_active', False)
 		try:
 			show_season = cup_active and await self.app.setting_show_season_points.get_value()
 		except Exception:
-			show_season = False
+			# Cup events default the points column on (CotD-style standings).
+			show_season = cup_active
 		self.show_season = show_season
 
 		# Collect (login, time_ms, finished) in display order: live round order when
@@ -131,7 +147,10 @@ class MatchHud(TemplateView):
 				entries.append((login, live.best_time(login), False))
 
 		self.players_count = len(entries)
-		self.ko_text = ko_per_round_label(getattr(live, '_double_until', 0), len(entries))
+		if practice:
+			self.ko_text = '—'
+		else:
+			self.ko_text = ko_per_round_label(getattr(live, '_double_until', 0), len(entries))
 
 		# Baseline for gap times: the fastest valid time on the board.
 		leader_ms = None

@@ -114,7 +114,8 @@ class KnockoutConfig(AppConfig):
 			'Show Live Match HUD',
 			Setting.CAT_BEHAVIOUR,
 			type=bool,
-			description='Show the always-on left-side match HUD (round, players alive, KOs/round, times) to everyone',
+			description='Show the always-on left-side match HUD (round, players alive, KOs/round, times). '
+				'On by default; stays on during active cups and BOTN even if this is off.',
 			default=True,
 			change_target=self._on_display_setting_changed,
 		)
@@ -139,7 +140,8 @@ class KnockoutConfig(AppConfig):
 			'Show Cup Points on HUD',
 			Setting.CAT_BEHAVIOUR,
 			type=bool,
-			description='Show each racer\'s running cup total (points so far in the active cup) on the match HUD',
+			description='Show each racer\'s running cup total (points so far in the active cup) on the match HUD. '
+				'On by default during cups and BOTN.',
 			default=True,
 			change_target=self._on_display_setting_changed,
 		)

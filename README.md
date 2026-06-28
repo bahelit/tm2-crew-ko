@@ -47,7 +47,9 @@ The cup auto-completes after every map in the playlist has been played, announce
 | `7` (or any number) | Completes after that many maps |
 | `0` | Open-ended — never auto-completes |
 
-A plain `//cup on` with no preset defaults to open-ended. Use a preset or `//cup mapcount all`.
+A plain `//cup on` with no preset defaults to open-ended. Use a preset or `//cup mapcount all`. If a fixed-length cup does not auto-complete, use `//cup end`.
+
+During cups and BOTN the left-side match HUD is on by default (practice times in TimeAttack, then the live knockout board with cup points).
 
 Shields (earned one-time saves) are a mode setting — enabled in the Friday preset, off for BOTN.
 
@@ -83,6 +85,7 @@ KNOCKOUT_STARTUP_MODE = 'botn'   # 'knockout' | 'botn' | 'none'
 |---|---|
 | `//cup on [key] [name]` | Start a cup (key can match a preset) |
 | `//cup off` | Stop the cup; return to TimeAttack |
+| `//cup end` | End the cup now (announce top 3, same as auto-complete) |
 | `//cup setup <preset>` | Load a preset's mode script and settings |
 | `//cup mapcount <n\|all>` | Set map count (`all` = playlist, `0` = open-ended) |
 | `//cup edition <n>` | Set edition number |

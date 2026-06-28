@@ -125,6 +125,21 @@ def round_value(round_no, total):
 	return str(round_no)
 
 
+def hud_applies(is_knockout, cup_active):
+	"""Whether the match HUD should be shown: always during Knockout, and also
+	during an active cup's TimeAttack phases (BOTN practice, between maps)."""
+	return bool(is_knockout) or bool(cup_active)
+
+
+def is_practice_phase(is_knockout, cup_active, botn_active=False, botn_phase='idle'):
+	"""True during cup/BOTN practice (TimeAttack) before the knockout is live."""
+	if is_knockout:
+		return False
+	if botn_active and botn_phase in ('practice', 'countdown'):
+		return True
+	return bool(cup_active)
+
+
 def ko_per_round_label(double_until, players):
 	"""Right-hand value for the HUD's ``KOS PER ROUND`` line. With double-knockout
 	configured (``double_until`` > 0) and more than that many players still in, the

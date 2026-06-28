@@ -359,6 +359,9 @@ class BotnController:
 		best = self.best.get(login)
 		if best is None or ms < best:
 			self.best[login] = ms
+			live = getattr(self.app, 'live', None)
+			if live is not None:
+				await live._refresh_overlays()
 
 	# ------------------------------------------------------------------ the cutoff
 

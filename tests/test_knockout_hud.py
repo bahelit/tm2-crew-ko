@@ -98,6 +98,14 @@ def test_round_value():
 	assert hud.round_value('x', 5) == '—'
 
 
+def test_ml_num_avoids_broken_size_syntax():
+	# Jinja would render 64.0 as "64.0", producing size="64.0. 38.0." (invalid).
+	assert hud.ml_num(64.0) == 64
+	assert hud.ml_num(38.0) == 38
+	assert hud.ml_num(-21.0) == -21
+	assert hud.ml_num(27.5) == 27.5
+
+
 def test_ko_per_round_label():
 	# Double-knockout active and field still above the threshold.
 	assert hud.ko_per_round_label(8, 14) == '2 UNTIL 8 PLAYERS'

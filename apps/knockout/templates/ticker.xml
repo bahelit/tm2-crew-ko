@@ -1,4 +1,4 @@
-<frame pos="0. 50." z-index="0">
+<frame pos="0. 50." z-index="50">
 	{% if showdown %}
 	<quad pos="0. 0." size="70. 9." halign="center" valign="top" z-index="-1"
 		style="Bgs1InRace" substyle="BgCardSystem" opacity="0.8" />

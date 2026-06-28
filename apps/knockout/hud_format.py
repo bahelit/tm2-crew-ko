@@ -5,6 +5,22 @@ them lives in views/hud.py.
 """
 
 
+def ml_num(value):
+	"""Format a number for ManiaLink ``pos``/``size`` attributes.
+
+	Jinja renders Python floats with a trailing ``.0`` (e.g. ``64.0``). In the
+	``W. H.`` size syntax that produces ``64.0. 38.0.`` -- three dots -- which
+	the client treats as invalid and the quad never draws. Whole values are
+	emitted as integers so templates can safely write ``{{ w }}. {{ h }}.``."""
+	try:
+		f = float(value)
+	except (TypeError, ValueError):
+		return 0
+	if f == int(f):
+		return int(f)
+	return f
+
+
 def format_race_time(ms):
 	"""Format a race time in milliseconds as ``M:SS.mmm`` (or ``S.mmm`` under a
 	minute). Returns an em dash for an unset/negative time (player still racing)."""

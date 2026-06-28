@@ -2,13 +2,16 @@ from pyplanet.views.template import TemplateView
 
 from ..hud_format import (
 	format_race_time, format_gap, match_label, round_value, ko_per_round_label,
+	ml_num,
 )
 
-# Where the first player row sits below the frame top, and the height of each
-# row. The header block (title + ROUND/PLAYERS/KOS + divider) fills the space
-# above START_Y. Kept in the view so the template never does float arithmetic.
-START_Y = -21.0
-ROW_H = 4.0
+# Layout mirrors the BOTN countdown: a title tab (TITLE_H) then a body panel.
+# Stats sit just under the tab; player rows follow. All geometry is precomputed
+# here so the template never does float arithmetic.
+TITLE_H = 7
+STATS_Y = (-9, -13, -17)   # ROUND, PLAYERS, KOS PER ROUND
+START_Y = -22
+ROW_H = 4
 
 # When more players are listed than MAX_ROWS, the middle is collapsed to a single
 # "…" marker: the top HEAD_ROWS and the trailing rows (which include the danger
@@ -51,6 +54,7 @@ class MatchHud(TemplateView):
 		self.has_divider = False
 		self.divider_y = 0.0
 		self.show_season = False
+		self.title_textsize = '2'
 
 	async def get_context_data(self):
 		data = await super().get_context_data()
@@ -60,20 +64,24 @@ class MatchHud(TemplateView):
 		data['ko_text'] = self.ko_text
 		data['rows'] = self.rows
 		data['has_divider'] = self.has_divider
-		data['divider_y'] = self.divider_y
-		# Background height is precomputed so the template never does float math.
-		data['bg_height'] = 22.0 + len(self.rows) * ROW_H
+		data['divider_y'] = ml_num(self.divider_y)
+		data['title_h'] = ml_num(TITLE_H)
+		data['stats_y'] = [ml_num(y) for y in STATS_Y]
 		# Season column: widen the panel and shift the time column left to make room
 		# for a right-hand points column. All geometry is precomputed here so the
 		# template stays arithmetic-free.
 		data['show_season'] = self.show_season
-		bg_width = 64.0 if self.show_season else 54.0
-		data['bg_width'] = bg_width
-		data['center_x'] = bg_width / 2.0
-		data['header_val_x'] = bg_width - 2.0
-		data['divider_w'] = bg_width - 4.0
-		data['time_x'] = 50.0 if self.show_season else 52.0
-		data['pts_x'] = 62.0
+		bg_width = 64 if self.show_season else 54
+		body_height = 15 + len(self.rows) * ROW_H
+		data['bg_width'] = ml_num(bg_width)
+		data['body_height'] = ml_num(body_height)
+		data['title_w'] = ml_num(bg_width - 4)
+		data['center_x'] = ml_num(bg_width / 2)
+		data['header_val_x'] = ml_num(bg_width - 2)
+		data['divider_w'] = ml_num(bg_width - 4)
+		data['time_x'] = ml_num(50 if self.show_season else 52)
+		data['pts_x'] = ml_num(62)
+		data['title_textsize'] = self.title_textsize
 		return data
 
 	async def refresh(self, live):
@@ -88,8 +96,12 @@ class MatchHud(TemplateView):
 
 		if getattr(live, 'is_botn', False):
 			self.match_text = BOTN_TITLE
+			# Long title needs a smaller font so it fits the tab without bleeding
+			# into the stats block below.
+			self.title_textsize = '1.5'
 		else:
 			self.match_text = match_label(getattr(live, 'match_number', 0))
+			self.title_textsize = '2'
 		self.round_text = round_value(getattr(live, 'round', 0), getattr(live, 'total_rounds', 0))
 		danger = set(live.danger_logins())
 
@@ -184,12 +196,12 @@ class MatchHud(TemplateView):
 		"""Assign each row its y position, drop the divider above the first danger
 		row, and gild the last safe time (the bubble) just above the cut line."""
 		self.has_divider = False
-		self.divider_y = 0.0
+		self.divider_y = 0
 		for index, row in enumerate(rows):
-			row['y'] = START_Y - index * ROW_H
+			row['y'] = ml_num(START_Y - index * ROW_H)
 			if not self.has_divider and not row.get('gap') and row.get('danger'):
 				self.has_divider = True
-				self.divider_y = row['y'] + 0.6
+				self.divider_y = ml_num(row['y'] + 1)
 				prev = rows[index - 1] if index > 0 else None
 				if prev and not prev.get('gap') and not prev.get('danger'):
 					prev['time_color'] = BUBBLE
@@ -210,6 +222,7 @@ class MatchHud(TemplateView):
 		self.players_count = 4
 		self.ko_text = '2 UNTIL 8 PLAYERS'
 		self.show_season = False
+		self.title_textsize = '2'
 		self.rows = [
 			dict(gap=False, danger=False, rank=1, name='Test A', time='12.470', name_color=WHITE, time_color=GREEN),
 			dict(gap=False, danger=False, rank=2, name='Test B', time='+0.031', name_color=WHITE, time_color=GREEN),

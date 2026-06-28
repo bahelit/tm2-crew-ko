@@ -1,8 +1,10 @@
 from pyplanet.views.template import TemplateView
 
+from ..hud_format import ml_num
+
 # Where the first crossing sits below the header tab, and the height of each row.
-FIRST_Y = -7.0
-ROW_H = 4.2
+FIRST_Y = -7
+ROW_H = 4
 
 
 class SplitsHud(TemplateView):
@@ -27,6 +29,7 @@ class SplitsHud(TemplateView):
 	async def get_context_data(self):
 		data = await super().get_context_data()
 		data['rows'] = self.rows
+		data['body_height'] = ml_num(max(4, len(self.rows) * ROW_H + 2))
 		return data
 
 	async def refresh(self, feed):
@@ -36,7 +39,7 @@ class SplitsHud(TemplateView):
 		rows = []
 		for index, entry in enumerate(feed):
 			row = dict(entry)
-			row['y'] = FIRST_Y - index * ROW_H
+			row['y'] = ml_num(FIRST_Y - index * ROW_H)
 			rows.append(row)
 		self.rows = rows
 		if not self.rows:

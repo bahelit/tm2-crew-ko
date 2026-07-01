@@ -75,6 +75,8 @@ class CupCommands:
 				description='Stop the Bowl of the Night.'),
 			Command(command='start', namespace='botn', target=self.cmd_botn_start, admin=True,
 				description='End BOTN practice now and start the knockout immediately.'),
+			Command(command='end', namespace='botn', target=self.cmd_botn_end, admin=True,
+				description='Fallback: force a stuck knockout to end now (record the result, return to practice).'),
 			Command(command='countdown', namespace='botn', target=self.cmd_botn_countdown, admin=True,
 				description='Set the seconds between practice closing and the knockout (e.g. 30 for testing).')
 				.add_param(name='seconds', required=True, type=int),
@@ -135,7 +137,12 @@ class CupCommands:
 			await self.instance.chat('$f00>>> No active cup.', player)
 
 	async def cmd_end(self, player, data, **kwargs):
-		"""Force-complete the active cup (e.g. when auto-complete did not fire)."""
+		"""Force-complete the active cup (fallback for when auto-complete did not fire).
+
+		Also recovers a stuck knockout: after completing the cup, force the server back
+		to TimeAttack immediately. The completion path only *queues* TimeAttack for the
+		next map, which a stuck knockout never reaches -- the explicit reload guarantees
+		the server leaves the knockout even if the mode is not rotating maps on its own."""
 		cup = self.cup.active_cup
 		if not cup:
 			await self.instance.chat('$f00>>> No active cup.', player)
@@ -145,6 +152,7 @@ class CupCommands:
 		await self.cup.complete_cup()
 		await self.app.hide_widget()
 		await self._refresh_hud_season()
+		await self.app.return_to_timeattack()
 
 	async def cmd_mapcount(self, player, data, **kwargs):
 		# 'all' (or a negative count) spans the whole current playlist.
@@ -250,6 +258,9 @@ class CupCommands:
 
 	async def cmd_botn_start(self, player, data, **kwargs):
 		await self.app.botn.force_start(player)
+
+	async def cmd_botn_end(self, player, data, **kwargs):
+		await self.app.botn.end_now(player)
 
 	async def cmd_botn_countdown(self, player, data, **kwargs):
 		await self.app.botn.set_countdown(player, data.seconds)

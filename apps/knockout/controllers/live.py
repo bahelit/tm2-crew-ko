@@ -37,6 +37,11 @@ class LiveController:
 		self.instance = app.instance
 		self.racing = []
 		self.order = []
+		# Logins knocked out this map, earliest first (from KOPlayerRemoved). Kept so
+		# the //botn end / //cup end admin fallback can synthesise a full-field result
+		# (survivors + everyone eliminated) if the mode ever fails to emit
+		# KOMatchStandings; see synth_standings.
+		self.eliminated = []
 		self.phase = 'idle'
 		self.round = 0
 		self.total_rounds = 0
@@ -135,6 +140,7 @@ class LiveController:
 	async def on_map_start(self, *args, **kwargs):
 		self.racing = []
 		self.order = []
+		self.eliminated = []
 		self.phase = 'idle'
 		self.round = 0
 		self.total_rounds = 0
@@ -332,6 +338,8 @@ class LiveController:
 		self.callbacks_seen['KOPlayerRemoved'] += 1
 		if login in self.racing:
 			self.racing.remove(login)
+		if login and login not in self.eliminated:
+			self.eliminated.append(login)
 		self.order = [e for e in self.order if e['login'] != login]
 		# Eliminations happen as the round resolves -> the countdown is done.
 		await self._hide_countdown()
@@ -411,6 +419,36 @@ class LiveController:
 			return []
 		live.sort(key=lambda e: e['rank'])
 		return [e['login'] for e in live[-self.danger_count:]]
+
+	def synth_standings(self):
+		"""Best-effort current knockout standings as ``[{login, points}]``, best first.
+
+		Used only by the ``//botn end`` / ``//cup end`` admin fallback when the mode
+		never emitted KOMatchStandings (a stuck knockout), so the map still records a
+		sensible result. Survivors rank above eliminated players; among survivors the
+		live KORoundOrder rank decides, and eliminated players rank by reverse
+		elimination order (last knocked out = survived longest = better). The points are
+		synthetic and only need to preserve this order -- ``compute_standings`` ranks by
+		score per map, so descending integers reproduce the correct placement."""
+		ranked = []
+		# Survivors first, best-ranked first from the live order when we have it.
+		for entry in sorted(self.order, key=lambda e: e['rank']):
+			if entry['login'] in self.racing:
+				ranked.append(entry['login'])
+		for login in self.racing:
+			if login not in ranked:
+				ranked.append(login)
+		# Then everyone eliminated, most-recently-eliminated first.
+		ranked += list(reversed(self.eliminated))
+		# Deduplicate while preserving order.
+		ordered = []
+		seen = set()
+		for login in ranked:
+			if login and login not in seen:
+				seen.add(login)
+				ordered.append(login)
+		total = len(ordered)
+		return [dict(login=login, points=total - index) for index, login in enumerate(ordered)]
 
 	# --------------------------------------------------------------- helpers
 

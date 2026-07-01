@@ -452,6 +452,36 @@ class KnockoutConfig(AppConfig):
 		self.arm_cup_handoff_immediately()
 		await self.queue_timeattack()
 
+	async def force_record_current_match(self, reason='manual'):
+		"""Best-effort record the live knockout's standings through the normal capture
+		path, for the ``//botn end`` / ``//cup end`` admin fallback.
+
+		The mode normally drives this by emitting KOMatchStandings at map end; if a
+		knockout is stuck (that callback never fires) the map never records and the
+		cup/BOTN never advance. Here we synthesise standings from the live HUD state and
+		push them through ``capture.record_match`` -- the SAME entry point the callback
+		uses -- so the save, cup update, HUD refresh and BOTN/cup transition all run
+		exactly as they would automatically. Returns True if standings were recorded.
+
+		Note: this records the *result* in the plugin; the caller is still responsible
+		for forcing the running mode off the stuck map (a RestartMap), since ManiaScript
+		keeps looping regardless of what the plugin records."""
+		live = getattr(self, 'live', None)
+		if live is None:
+			return False
+		# Only synthesise a result while a Knockout mode is actually loaded, so stale
+		# live state left over in another mode can never be recorded as a phantom map.
+		if not getattr(live, 'is_knockout', False):
+			logger.info('Knockout: force-record (%s) skipped -- not in a Knockout mode', reason)
+			return False
+		standings = live.synth_standings()
+		if not standings:
+			logger.info('Knockout: force-record (%s) found no live standings to save', reason)
+			return False
+		logger.info('Knockout: force-recording %d live standings (%s)', len(standings), reason)
+		await self.capture.record_match(standings)
+		return True
+
 	async def update_widget(self):
 		"""Refresh the live widget, or hide it when no cup is active / disabled."""
 		if not getattr(self, '_show_widget', False) or not self.cup.active_cup:

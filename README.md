@@ -85,7 +85,7 @@ KNOCKOUT_STARTUP_MODE = 'botn'   # 'knockout' | 'botn' | 'none'
 |---|---|
 | `//cup on [key] [name]` | Start a cup (key can match a preset) |
 | `//cup off` | Stop the cup; return to TimeAttack |
-| `//cup end` | End the cup now (announce top 3, same as auto-complete) |
+| `//cup end` | End the cup now (announce top 3, same as auto-complete); forces the server back to TimeAttack |
 | `//cup setup <preset>` | Load a preset's mode script and settings |
 | `//cup mapcount <n\|all>` | Set map count (`all` = playlist, `0` = open-ended) |
 | `//cup edition <n>` | Set edition number |
@@ -96,6 +96,7 @@ KNOCKOUT_STARTUP_MODE = 'botn'   # 'knockout' | 'botn' | 'none'
 | `//botn on [HH:MM]` | Start BOTN (optional cutoff override) |
 | `//botn off` | Stop BOTN |
 | `//botn start` | End practice now, start knockout |
+| `//botn end` | Fallback: force a stuck knockout to end (record result, return to practice) |
 | `//botn countdown <seconds>` | Handoff countdown (e.g. `30` for testing) |
 | `//ko hud` | HUD diagnostic |
 

@@ -283,6 +283,52 @@ class BotnController:
 		self._cancel_task()
 		await self._on_cutoff()
 
+	async def end_now(self, player=None):
+		"""Admin fallback: force a stuck knockout to conclude (``//botn end``).
+
+		The night's knockout should end on its own (last survivor -> the mode emits
+		KOMatchStandings -> the map records and we return to practice). If it ever gets
+		stuck, this: (1) best-effort records the current standings through the normal
+		capture path so the result is saved and the cup/HUD/transition state update, then
+		(2) forces the current map to reload in TimeAttack -- ManiaScript keeps looping a
+		stuck knockout no matter what the plugin records, so only a RestartMap actually
+		breaks it -- landing the server back in the next practice phase."""
+		if not self.active:
+			await self.instance.chat('$f00>>> No Bowl of the Night is running.', player)
+			return
+		if self.phase != 'knockout':
+			await self.instance.chat(
+				'$f00>>> BOTN is in the $fff{}$f00 phase, not a knockout. Use $fff//botn start$f00 '
+				'to begin the knockout, or $fff//botn off$f00 to stop.'.format(self.phase), player)
+			return
+
+		# (1) Save the result + run the normal end-of-knockout transition. record_match
+		# fans out to on_knockout_recorded (re-arms the next cutoff, opens a fresh weekly
+		# cup if this map completed it). If nothing recorded, drive the transition directly
+		# so our state still advances.
+		await self.app.force_record_current_match(reason='botn end')
+		if self.phase == 'knockout':
+			await self.on_knockout_recorded()
+
+		# (2) Break the still-running (stuck) knockout: reload the current map in
+		# TimeAttack now rather than waiting for a map rotation that will never come.
+		await self._force_practice_reload()
+		await self.instance.chat(
+			'$09f>>> Forced the Bowl of the Night knockout to end — back to practice.', player)
+
+	async def _force_practice_reload(self):
+		"""Reload the current map in TimeAttack immediately (set_next_script + RestartMap)
+		and hold it open for practice. Used by ``end_now`` to break a stuck knockout that
+		will not end on its own. on_knockout_recorded has already flipped us to the
+		practice phase and re-armed the cutoff/overlay; this just forces the live mode
+		switch, so the one-shot map-rotation handoff is cleared to avoid a double reload."""
+		self._force_ta_next_map = False
+		settings = {'S_TimeLimit': PRACTICE_TIMELIMIT}
+		await self._apply_mode_settings(settings, stage=True)
+		await self._load_script(TIMEATTACK_SCRIPT)
+		if await self._await_script(TIMEATTACK_SCRIPT):
+			await self._apply_mode_settings(settings, stage=False)
+
 	async def on_knockout_recorded(self):
 		"""The night's knockout map just finished (its standings were recorded). Return
 		the server to TimeAttack and re-arm tomorrow's cutoff; the mode's own map-end

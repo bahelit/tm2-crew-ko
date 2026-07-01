@@ -648,7 +648,17 @@ if (!Map.TMObjective_IsLapRace && !ServerShutdownRequested && !MatchEndRequested
 					declare CTmPlayer SlowestPlayer;
 					SlowestPlayer = Null;
 					foreach (Player in Players) {
-						if (IsRacing(Player.User) && Player.CurRace.Time == SlowestTime) {
+						// Match the finisher by their snapshotted round race (Score.BestRace),
+						// NOT Player.CurRace: Match_EndRound runs after TM::WaitRaceAll() (above),
+						// which ends every race and clears CurRace, so CurRace.Time no longer holds
+						// the finish time -- nothing would match, nobody is knocked out, and the
+						// knockout loops rounds forever without ever reaching one winner (so
+						// Match_EndMap / KOMatchStandings never fire). BestRace is the copy taken at
+						// finish in Match_PlayLoop, from the same CurRace.Time that filled
+						// RoundFinishTimes, so it matches exactly.
+						if (IsRacing(Player.User) && Player.Score != Null
+								&& Player.Score.BestRace != Null
+								&& Player.Score.BestRace.Time == SlowestTime) {
 							SlowestPlayer = Player;
 							break;
 						}

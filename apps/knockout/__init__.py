@@ -12,7 +12,7 @@ from .controllers.results import ResultsController
 from .season import SeasonController
 from .controllers.live import LiveController
 from .markers import MarkersController
-from .config import PresetConfig
+from .config import PresetConfig, BUNDLED_PRESETS_PATH
 from .views import CupWidget, CupTicker, CupLowerThird, MatchHud, FinishCountdown, BotnCountdown, SplitsHud
 from . import score_modes
 from . import callbacks
@@ -64,7 +64,8 @@ class KnockoutConfig(AppConfig):
 			'Cup Presets File',
 			Setting.CAT_BEHAVIOUR,
 			type=str,
-			description='Path to the cup presets JSON file (names/presets/payouts)',
+			description='Path to a cup presets JSON file (names/presets/payouts). '
+				'Leave blank to use the bundled apps/knockout/presets.json (friday/weekly/quick).',
 			default='',
 		)
 		self.setting_default_score_mode = Setting(
@@ -102,10 +103,12 @@ class KnockoutConfig(AppConfig):
 		)
 		self.setting_show_overlays = Setting(
 			'show_overlays',
-			'Show Broadcast Overlays',
+			'Show Broadcast Overlays to Everyone',
 			Setting.CAT_BEHAVIOUR,
 			type=bool,
-			description='Show the live players-remaining ticker and elimination lower-third (for streams)',
+			description='Stream ticker + elimination lower-third: OFF = pure spectators (and anyone '
+				'who ran /ko stream) only; ON = every connected client. Not required for the match '
+				'HUD / cup points / splits / finish countdown.',
 			default=False,
 			change_target=self._on_display_setting_changed,
 		)
@@ -114,8 +117,9 @@ class KnockoutConfig(AppConfig):
 			'Show Live Match HUD',
 			Setting.CAT_BEHAVIOUR,
 			type=bool,
-			description='Show the always-on left-side match HUD (round, players alive, KOs/round, times). '
-				'On by default; stays on during active cups and BOTN even if this is off.',
+			description='Show the always-on left-side match HUD (round, players alive, KOs/round, times), '
+				'plus splits and finish countdown. On by default; always on during active cups and BOTN '
+				'even if this is turned off.',
 			default=True,
 			change_target=self._on_display_setting_changed,
 		)
@@ -140,8 +144,8 @@ class KnockoutConfig(AppConfig):
 			'Show Cup Points on HUD',
 			Setting.CAT_BEHAVIOUR,
 			type=bool,
-			description='Show each racer\'s running cup total (points so far in the active cup) on the match HUD. '
-				'On by default during cups and BOTN.',
+			description='Legacy toggle; cup points always appear on the match HUD during an active '
+				'cup or BOTN (no admin action needed).',
 			default=True,
 			change_target=self._on_display_setting_changed,
 		)
@@ -236,11 +240,15 @@ class KnockoutConfig(AppConfig):
 
 		self._match_winner = None
 
-		# Cup presets (names / mode presets / payouts) from the configured file.
+		# Cup presets (names / mode presets / payouts). Prefer an explicit path from
+		# the PyPlanet settings file or //settings; otherwise use the bundled defaults
+		# that ship inside apps/knockout/ so a plain deploy gets friday/weekly/quick.
 		presets_path = self._settings_file_cup_presets_path()
 		if not presets_path:
 			presets_path = await self.setting_cup_presets_path.get_value()
-		self.presets = PresetConfig(presets_path or None)
+		if not presets_path:
+			presets_path = BUNDLED_PRESETS_PATH
+		self.presets = PresetConfig(presets_path)
 		self.presets.load()
 
 		# Cup controllers: state machine, score capture, and commands.
@@ -257,8 +265,11 @@ class KnockoutConfig(AppConfig):
 		self.markers = MarkersController(self)
 		await self.markers.on_start()
 
-		# Broadcast overlays: live ticker + transient lower-third (off by default).
+		# Broadcast / stream overlays: ticker + lower-third. Global show_overlays
+		# pushes them to everyone; otherwise they go to pure spectators and any
+		# login that opted in with /ko stream (the dedicated stream box).
 		self._overlays_enabled = await self.setting_show_overlays.get_value()
+		self.stream_hud_logins = set()
 		self.ticker = CupTicker(self)
 		self.lower_third = CupLowerThird(self)
 
@@ -389,6 +400,161 @@ class KnockoutConfig(AppConfig):
 		except Exception:
 			logger.exception('Knockout: failed to return to TimeAttack')
 
+	async def stream_overlay_targets(self):
+		"""Who should receive the stream-only ticker / lower-third.
+
+		Returns:
+		  * ``None`` — show to everyone (global ``show_overlays`` is on).
+		  * a list of player objects — pure spectators plus anyone who opted in
+		    with ``/ko stream`` (the dedicated stream spectator machine).
+		  * an empty list — nobody (hide).
+		"""
+		if getattr(self, '_overlays_enabled', False):
+			return None
+		wanted = set(getattr(self, 'stream_hud_logins', ()) or ())
+		targets = []
+		try:
+			online = self.instance.player_manager.online
+		except Exception:
+			return []
+		for entry in online:
+			login = getattr(entry, 'login', None)
+			if not login:
+				continue
+			if login in wanted:
+				targets.append(entry)
+				continue
+			flow = getattr(entry, 'flow', None)
+			if flow is not None and getattr(flow, 'is_spectator', False):
+				targets.append(entry)
+		return targets
+
+	async def push_stream_view(self, view, visible=True):
+		"""Show or hide a stream overlay for the current target set.
+
+		When ``visible`` is False the view is hidden for everyone. When True it is
+		pushed to global (if show_overlays) or to each spectator/opt-in client, and
+		explicitly hidden for everyone else so a racer who was spectating loses it.
+		"""
+		if view is None:
+			return
+		if not visible:
+			try:
+				await view.hide()
+			except Exception:
+				logger.exception('Knockout: failed to hide stream view')
+			return
+
+		targets = await self.stream_overlay_targets()
+		if targets is None:
+			try:
+				await view.display()
+			except Exception:
+				logger.exception('Knockout: failed to display stream view globally')
+			return
+
+		try:
+			online = list(self.instance.player_manager.online)
+		except Exception:
+			online = list(targets)
+
+		target_logins = {
+			getattr(player, 'login', None) for player in targets
+			if getattr(player, 'login', None)
+		}
+		for entry in online:
+			login = getattr(entry, 'login', None)
+			if not login:
+				continue
+			try:
+				if login in target_logins:
+					await view.display(player=entry)
+				else:
+					await view.hide(player=entry)
+			except Exception:
+				logger.exception(
+					'Knockout: failed to push stream view to %s', login)
+
+
+	async def apply_mode_preset(self, script=None, settings=None, restart=True):
+		"""Load a mode script and/or settings the same way BOTN does.
+
+		Staging alone (set_next_script without RestartMap) only takes effect on the
+		next map rotation, which is why ``//cup setup`` used to look like it did nothing
+		during BOTN/TimeAttack. With ``restart=True`` (the default) we:
+
+		1. Stage settings for the next script load when supported.
+		2. ``set_next_script`` + ``RestartMap`` so the mode loads on the *current* map.
+		3. Once the script is live, push settings again onto the running mode so values
+		   that the mode reads at map-start (warm-up laps, shields, …) actually land.
+
+		Returns True when a script was requested and confirmed live (or no script was
+		requested and settings were applied). False when a requested script never loaded.
+		"""
+		import asyncio
+		import time as _time
+
+		settings = settings or {}
+		mm = self.instance.mode_manager
+
+		async def _apply(stage):
+			if not settings:
+				return
+			try:
+				if stage:
+					fn = getattr(mm, 'update_next_settings', None)
+					if fn is not None:
+						await fn(settings)
+						return
+				await mm.update_settings(settings)
+			except Exception:
+				logger.exception(
+					'Knockout: failed to apply mode settings (stage=%s)', stage)
+
+		async def _current_script(refresh=True):
+			try:
+				return (await mm.get_current_script(refresh=refresh)) or ''
+			except TypeError:
+				try:
+					return (await mm.get_current_script()) or ''
+				except Exception:
+					return ''
+			except Exception:
+				return ''
+
+		async def _await_script(wanted, timeout=8.0, interval=0.25):
+			name = wanted.lower().rsplit('/', 1)[-1].split('.')[0]
+			deadline = _time.time() + timeout
+			while _time.time() < deadline:
+				if name in (await _current_script()).lower():
+					return True
+				await asyncio.sleep(interval)
+			logger.warning(
+				'Knockout: mode script %s did not load within %ss', wanted, timeout)
+			return False
+
+		if script:
+			await _apply(stage=True)
+			try:
+				await mm.set_next_script(script)
+				if restart:
+					await self.instance.gbx('RestartMap')
+			except Exception:
+				logger.exception('Knockout: failed to load mode script %s', script)
+				return False
+			if restart:
+				ok = await _await_script(script)
+				if ok and settings:
+					await _apply(stage=False)
+				return ok
+			# Queued only: settings stay staged for the next map.
+			return True
+
+		# Settings only, no script change — push onto the running mode.
+		if settings:
+			await _apply(stage=False)
+		return True
+
 	def arm_cup_handoff_immediately(self):
 		"""Set the cup handoff flag synchronously (see capture.record_match)."""
 		self._force_ta_cup_next_map = True
@@ -506,23 +672,27 @@ class KnockoutConfig(AppConfig):
 		takes effect immediately instead of needing an app reload.
 		"""
 		self._overlays_enabled = await self.setting_show_overlays.get_value()
-		self._match_hud_enabled = await self.setting_show_match_hud.get_value()
 		self._show_widget = await self.setting_show_cup_widget.get_value()
 
-		# Hide whatever was just turned off (a disabled view is skipped by
-		# _refresh_overlays, so it would otherwise linger on screen).
-		if not self._overlays_enabled:
-			await self._hide_view(getattr(self, 'ticker', None))
-			await self._hide_view(getattr(self, 'lower_third', None))
-		if not self._match_hud_enabled:
-			await self._hide_view(getattr(self, 'hud', None))
-			await self._hide_view(getattr(self, 'finish_countdown', None))
-
-		# Repaint the still-enabled overlays from the live match state, and let
-		# update_widget show/hide the cup widget per its own flag + active cup.
+		# Match HUD package (left panel, splits, finish countdown) uses the live
+		# controller's effective gate: always on during cup/BOTN even if the global
+		# show_match_hud setting is off. Stream overlays retarget via _refresh_overlays
+		# (spectators / opt-in / everyone depending on show_overlays).
 		live = getattr(self, 'live', None)
 		if live is not None:
+			try:
+				hud_on = await live._match_hud_enabled()
+			except Exception:
+				hud_on = True
+			self._match_hud_enabled = hud_on
+			if not hud_on:
+				await self._hide_view(getattr(self, 'hud', None))
+				await self._hide_view(getattr(self, 'finish_countdown', None))
+				await self._hide_view(getattr(self, 'splits', None))
 			await live._refresh_overlays()
+		else:
+			self._match_hud_enabled = await self.setting_show_match_hud.get_value()
+
 		await self.update_widget()
 
 	async def _hide_view(self, view):

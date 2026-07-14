@@ -1,7 +1,12 @@
 import json
 import logging
+import os
 
 logger = logging.getLogger(__name__)
+
+# Bundled defaults ship with the app package so a plain apps/knockout/ deploy
+# gets the friday/weekly/quick cups without a separate config step.
+BUNDLED_PRESETS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'presets.json')
 
 
 class PresetConfig:
@@ -9,7 +14,7 @@ class PresetConfig:
 	Loads cup presets from a JSON file with three sections:
 
 	* ``names``   - cup definitions (display name, linked preset/payout/scoremode/mapcount)
-	* ``presets`` - mode script + script_settings to push via //cup setup
+	* ``presets`` - mode script + script_settings to push via //cup setup / //cup on
 	* ``payouts`` - planet amounts by placement
 	"""
 
@@ -49,3 +54,19 @@ class PresetConfig:
 	def get_payout(self, key):
 		"""Return a payout amount list, or an empty list."""
 		return self.payouts.get(key, []) or []
+
+	def resolve_mode_preset(self, cup_key):
+		"""Return ``(preset_key, preset_dict)`` for a cup key, or ``(None, None)``.
+
+		Looks up a named cup's linked ``preset`` field first (e.g. friday ->
+		knockout_friday), then falls back to treating the key itself as a mode
+		preset id (so ``//cup setup knockout_friday`` and ``//cup on friday`` both work).
+		"""
+		if not cup_key:
+			return None, None
+		cup_cfg = self.get_cup(cup_key) or {}
+		preset_key = cup_cfg.get('preset') or cup_key
+		preset = self.get_preset(preset_key)
+		if not preset:
+			return None, None
+		return preset_key, preset

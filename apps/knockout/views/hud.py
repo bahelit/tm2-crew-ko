@@ -121,14 +121,13 @@ class MatchHud(TemplateView):
 			self.round_text = round_value(getattr(live, 'round', 0), getattr(live, 'total_rounds', 0))
 		danger = set() if practice else set(live.danger_logins())
 
-		# Points column (running cup total) shows whenever a cup is active and the
-		# setting is on -- from map 1, with zeros, before any map is recorded.
+		# Points column (running cup total) is part of the CotD-style match HUD during
+		# an active cup/BOTN: always on from map 1 (zeros until a map is recorded), so
+		# admins do not need a separate //settings toggle for it to appear. The global
+		# show_season_points setting can only hide the column when no cup is active
+		# (which is a no-op — there are no points to show then).
 		season = getattr(live, 'season_points', None) or {}
-		try:
-			show_season = cup_active and await self.app.setting_show_season_points.get_value()
-		except Exception:
-			# Cup events default the points column on (CotD-style standings).
-			show_season = cup_active
+		show_season = bool(cup_active)
 		self.show_season = show_season
 
 		# Collect (login, time_ms, finished) in display order: live round order when

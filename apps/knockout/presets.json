@@ -1,5 +1,4 @@
 {
-	"_comment": "Reference copy of the defaults that ship inside apps/knockout/presets.json. The app loads that bundled file automatically; only set KNOCKOUT_CUP_PRESETS_PATH / cup_presets_path if you need a custom override.",
 	"names": {
 		"friday": {
 			"name": "Friday Knockout Cup",

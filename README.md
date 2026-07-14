@@ -22,7 +22,7 @@ Set the mode in your matchsettings playlist. Do not enable `S_UseLegacyXmlRpcCal
 
 **PyPlanet** — copy `apps/knockout/` into your project's `apps/` directory, add `'apps.knockout'` to `APPS`, and point `DEDICATED` at the server's XML-RPC port and SuperAdmin password. See `pyplanet_settings_example.py`.
 
-Optional: copy `presets_example.json` and set `KNOCKOUT_CUP_PRESETS_PATH` in `settings/base.py`.
+Cup presets (`friday`, `weekly`, `quick`) ship inside `apps/knockout/presets.json` and load automatically — no extra install step. Override with `KNOCKOUT_CUP_PRESETS_PATH` in `settings/base.py` (or the live `cup_presets_path` setting) only if you need custom cups.
 
 ---
 
@@ -35,9 +35,10 @@ A multi-map competition. Each map is one knockout match; placements earn cup poi
 **Typical Friday cup** (whole playlist, shields on):
 
 ```
-//cup setup knockout_friday
 //cup on friday
 ```
+
+That one command stops any running BOTN, loads the Knockout mode with the Friday settings (warm-up, shields, …), and starts a cup that spans the whole playlist. (`//cup setup knockout_friday` is still available if you only want to load the mode without starting a cup.)
 
 The cup auto-completes after every map in the playlist has been played, announces the top 3, and returns to TimeAttack.
 
@@ -49,7 +50,9 @@ The cup auto-completes after every map in the playlist has been played, announce
 
 A plain `//cup on` with no preset defaults to open-ended. Use a preset or `//cup mapcount all`. If a fixed-length cup does not auto-complete, use `//cup end`.
 
-During cups and BOTN the left-side match HUD is on by default (practice times in TimeAttack, then the live knockout board with cup points).
+During cups and BOTN the player HUD package is always on (no admin toggles needed): left-side match board (practice times in TimeAttack, then live knockout order with cup points), bottom checkpoint splits during rounds, and the finish countdown.
+
+**Stream box:** the ticker + elimination lower-third go to **pure spectators automatically** (your dedicated spectator capture client). Racers do not see them. On the stream machine you can also run `/ko stream on` to force them for that login, or `/ko stream status` to check. Admins can push them to *everyone* with `show_overlays` in `//settings`.
 
 Shields (earned one-time saves) are a mode setting — enabled in the Friday preset, off for BOTN.
 
@@ -83,10 +86,10 @@ KNOCKOUT_STARTUP_MODE = 'botn'   # 'knockout' | 'botn' | 'none'
 
 | Command | Description |
 |---|---|
-| `//cup on [key] [name]` | Start a cup (key can match a preset) |
+| `//cup on [key] [name]` | Start a cup; `friday` / `weekly` / `quick` apply the linked mode + map count |
 | `//cup off` | Stop the cup; return to TimeAttack |
 | `//cup end` | End the cup now (announce top 3, same as auto-complete); forces the server back to TimeAttack |
-| `//cup setup <preset>` | Load a preset's mode script and settings |
+| `//cup setup <preset>` | Load a mode preset now (`knockout_friday`, or a cup key like `friday`) |
 | `//cup mapcount <n\|all>` | Set map count (`all` = playlist, `0` = open-ended) |
 | `//cup edition <n>` | Set edition number |
 | `//cup scoremode <id>` | Points table: `default`, `f1`, `flat`, `survival` |
@@ -110,6 +113,7 @@ KNOCKOUT_STARTUP_MODE = 'botn'   # 'knockout' | 'botn' | 'none'
 | `/cup season [key]` | Season leaderboard |
 | `/cup stats <login>` | Player cup history |
 | `/botn status` | BOTN phase and cutoff time |
+| `/ko stream [on/off/status]` | Personal stream overlays (ticker/lower-third); spectators already get them |
 
 ---
 
@@ -124,6 +128,6 @@ Most options are changed live with `//settings` (no restart). Key ones:
 | `botn_countdown_seconds` | `900` | Practice → knockout delay |
 | `botn_warmup_laps` | `3` | Warm-up laps before eliminations |
 | `show_match_hud` | on | Left-side match HUD |
-| `cup_presets_path` | blank | Presets JSON for `//cup on` / `//cup setup` |
+| `cup_presets_path` | blank | Override path; blank uses bundled `apps/knockout/presets.json` |
 
-Cup presets JSON format: see `presets_example.json` (`names`, `presets`, `payouts`).
+Cup presets JSON format: see `apps/knockout/presets.json` (or the reference copy `presets_example.json`).

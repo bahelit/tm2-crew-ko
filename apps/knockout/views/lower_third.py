@@ -5,9 +5,10 @@ from pyplanet.views.template import TemplateView
 
 class CupLowerThird(TemplateView):
 	"""
-	Transient broadcast banner for big moments: an elimination, the round winner,
-	or a shield being earned/spent. Shown via flash(), it auto-hides after a few
-	seconds. A newer flash supersedes an older one's pending hide.
+	Transient stream banner for big moments: elimination, round winner, or shield
+	earned/spent. Same audience as the ticker (spectators + /ko stream, or everyone
+	when show_overlays is on). flash() auto-hides after a few seconds; a newer
+	flash supersedes an older pending hide.
 	"""
 
 	template_name = 'knockout/lower_third.xml'
@@ -30,11 +31,11 @@ class CupLowerThird(TemplateView):
 		self.text = text
 		self._token += 1
 		token = self._token
-		await self.display()
+		await self.app.push_stream_view(self, visible=True)
 		asyncio.ensure_future(self._auto_hide(token))
 
 	async def _auto_hide(self, token):
 		await asyncio.sleep(self.duration)
 		# Only hide if no newer flash replaced us in the meantime.
 		if token == self._token:
-			await self.hide()
+			await self.app.push_stream_view(self, visible=False)

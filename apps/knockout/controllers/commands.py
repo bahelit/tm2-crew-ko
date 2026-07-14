@@ -68,6 +68,10 @@ class CupCommands:
 				.add_param(name='note', required=False, nargs='*', help='Marker note.'),
 			Command(command='hud', namespace='ko', target=self.cmd_hud, admin=True,
 				description='Diagnostic: report match HUD state and force a test render.'),
+			Command(command='stream', namespace='ko', target=self.cmd_stream, admin=False,
+				description='Toggle stream overlays (ticker + lower-third) for yourself. '
+					'Pure spectators already get them; use this on the dedicated stream box if needed.')
+				.add_param(name='state', required=False, help='on | off (toggles if omitted).'),
 			Command(command='on', namespace='botn', target=self.cmd_botn_on, admin=True,
 				description='Start a Bowl of the Night (TimeAttack practice until the cutoff, then knockout).')
 				.add_param(name='time', required=False, help='Override cutoff time HH:MM (e.g. 18:30).'),
@@ -114,8 +118,38 @@ class CupCommands:
 		if not score_mode:
 			score_mode = await self.app.setting_default_score_mode.get_value()
 
+		# A live BOTN owns the cup slot and the mode schedule. Tear it down first so
+		# //cup on friday can take over the server (otherwise BOTN keeps the map in
+		# TimeAttack practice and the cup only "starts" as a tracking row).
+		botn = getattr(self.app, 'botn', None)
+		if botn is not None and getattr(botn, 'active', False):
+			await botn.stop(player)
+
+		# Apply the linked mode preset (script + settings) so the server actually leaves
+		# TimeAttack and runs Knockout. Without this, //cup on only created a DB cup and
+		# never switched modes — which is why Cup mode looked like it "wouldn't start".
+		preset_key, preset = self.app.presets.resolve_mode_preset(data.key)
+		mode_script = None
+		if preset:
+			mode_script = preset.get('script')
+			settings = preset.get('settings') or {}
+			ok = await self.app.apply_mode_preset(
+				script=mode_script, settings=settings, restart=True)
+			if not ok and mode_script:
+				await self.instance.chat(
+					'$f00>>> Mode script $fff{}$f00 did not load — cup will still track, but '
+					'the server may not be in Knockout. Confirm Knockout.Script.txt is on the '
+					'dedicated server.'.format(mode_script),
+					player,
+				)
+			elif preset_key:
+				await self.instance.chat(
+					'$ff0>>> Applied mode preset $fff{}$ff0 ({} setting(s)).'.format(
+						preset_key, len(settings)))
+
 		cup = await self.cup.start_cup(
 			cup_key=data.key, name=name, map_count=map_count, score_mode=score_mode,
+			mode_script=mode_script,
 		)
 		await self.instance.chat(
 			'$ff0>>> $fff{}$ff0 started a cup: $fff{}$ff0 (edition {}, {}).'.format(
@@ -176,20 +210,36 @@ class CupCommands:
 		await self.instance.chat('$ff0>>> Cup score mode set to $fff{}$ff0.'.format(data.mode))
 
 	async def cmd_setup(self, player, data, **kwargs):
-		preset = self.app.presets.get_preset(data.preset)
+		# Accept either a mode preset id (knockout_friday) or a cup name key (friday)
+		# that points at one.
+		preset_key, preset = self.app.presets.resolve_mode_preset(data.preset)
 		if not preset:
-			await self.instance.chat('$f00>>> Unknown preset "{}".'.format(data.preset), player)
+			preset = self.app.presets.get_preset(data.preset)
+			preset_key = data.preset if preset else None
+		if not preset:
+			known = ', '.join(sorted(self.app.presets.presets.keys())) or '(none loaded)'
+			await self.instance.chat(
+				'$f00>>> Unknown preset "{}". Known: $fff{}$f00.'.format(data.preset, known),
+				player,
+			)
 			return
 		script = preset.get('script')
 		settings = preset.get('settings') or {}
-		if script:
-			await self.instance.mode_manager.set_next_script(script)
-		if settings:
-			await self.instance.mode_manager.update_settings(settings)
+		# Restart into the mode now (same path as //cup on / BOTN) so setup is not
+		# deferred until the next map rotation.
+		ok = await self.app.apply_mode_preset(
+			script=script, settings=settings, restart=bool(script))
+		if script and not ok:
+			await self.instance.chat(
+				'$f00>>> Failed to load script $fff{}$f00 for preset $fff{}$f00.'.format(
+					script, preset_key),
+				player,
+			)
+			return
 		await self.instance.chat(
 			'$ff0>>> Applied preset $fff{}$ff0 ({} setting(s)){}.'.format(
-				data.preset, len(settings),
-				' — new script loads on next map' if script else '')
+				preset_key, len(settings),
+				' — Knockout loaded on current map' if script else '')
 		)
 
 	async def cmd_pay(self, player, data, **kwargs):
@@ -325,6 +375,66 @@ class CupCommands:
 			return target.nickname
 		except Exception:
 			return login
+
+	async def cmd_stream(self, player, data, **kwargs):
+		"""Personal stream-HUD opt-in for the dedicated spectator / capture client.
+
+		Pure spectators already receive the ticker and lower-third automatically.
+		This command forces them on for the calling login even if that client is not
+		flagged as a pure spectator, and survives reconnects until turned off.
+		"""
+		login = getattr(player, 'login', None)
+		if not login:
+			return
+		wanted = getattr(self.app, 'stream_hud_logins', None)
+		if wanted is None:
+			self.app.stream_hud_logins = set()
+			wanted = self.app.stream_hud_logins
+
+		raw = (getattr(data, 'state', None) or '').strip().lower()
+		if raw in ('on', '1', 'true', 'yes'):
+			enable = True
+		elif raw in ('off', '0', 'false', 'no'):
+			enable = False
+		elif raw in ('', None):
+			enable = login not in wanted
+		elif raw == 'status':
+			auto = False
+			try:
+				flow = getattr(player, 'flow', None)
+				auto = bool(flow and getattr(flow, 'is_spectator', False))
+			except Exception:
+				pass
+			global_on = bool(getattr(self.app, '_overlays_enabled', False))
+			opted = login in wanted
+			await self.instance.chat(
+				'$bbb>>> Stream HUD: personal=$fff{}$bbb spectator=$fff{}$bbb '
+				'show_overlays(everyone)=$fff{}$bbb. Use $fff/ko stream on$bbb to force on.'.format(
+					'on' if opted else 'off',
+					'yes' if auto else 'no',
+					'on' if global_on else 'off'),
+				player,
+			)
+			return
+		else:
+			await self.instance.chat(
+				'$f00>>> Usage: $fff/ko stream [on|off|status]$f00.', player)
+			return
+
+		if enable:
+			wanted.add(login)
+			await self.instance.chat(
+				'$0f0>>> Stream overlays ON for you (ticker + lower-third). '
+				'$0f0/ko stream off to disable.', player)
+		else:
+			wanted.discard(login)
+			await self.instance.chat(
+				'$ff0>>> Stream overlays personal opt-in OFF. '
+				'You still see them while pure-spectating.', player)
+
+		live = getattr(self.app, 'live', None)
+		if live is not None:
+			await live._refresh_overlays()
 
 	async def cmd_streamstart(self, player, data, **kwargs):
 		markers = getattr(self.app, 'markers', None)

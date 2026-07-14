@@ -52,6 +52,11 @@ DATABASES = {
 # to drive the boot mode from //settings instead.
 KNOCKOUT_STARTUP_MODE = 'botn'
 
+# Optional. Cup presets (friday / weekly / quick) already ship inside
+# apps/knockout/presets.json and load automatically when this is unset.
+# Point here only to override with a custom JSON file.
+# KNOCKOUT_CUP_PRESETS_PATH = '/path/to/custom_presets.json'
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # settings/apps.py  — which apps load

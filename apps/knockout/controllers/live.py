@@ -117,9 +117,14 @@ class LiveController:
 		# Checkpoint crossings drive the bottom splits feed during live rounds.
 		self.app.context.signals.listen(tm_signals.waypoint, self.on_waypoint)
 
-		# Keep the warm-up roster current as players come and go.
+		# Keep the warm-up roster current as players come and go. Also re-target
+		# stream overlays when someone connects/disconnects or flips spectator.
 		self.app.context.signals.listen(mp_signals.player.player_connect, self.on_roster_change)
 		self.app.context.signals.listen(mp_signals.player.player_disconnect, self.on_roster_change)
+		info_signal = getattr(mp_signals.player, 'player_info_changed', None) or getattr(
+			mp_signals.player, 'player_info_change', None)
+		if info_signal is not None:
+			self.app.context.signals.listen(info_signal, self.on_roster_change)
 
 		# Reset the live picture whenever a new map (and so a new match) starts.
 		self.app.context.signals.listen(mp_signals.map.map_start, self.on_map_start)
@@ -453,25 +458,29 @@ class LiveController:
 	# --------------------------------------------------------------- helpers
 
 	async def _match_hud_enabled(self):
-		"""Match HUD is on by default; cup/BOTN events keep it on even if the global
-		toggle is off, so the CotD-style leaderboard is always visible during events."""
-		try:
-			if await self.app.setting_show_match_hud.get_value():
-				return True
-		except Exception:
-			pass
+		"""Whether the player-facing match HUD package should paint.
+
+		Covers the left-side leaderboard, bottom splits feed, and finish countdown.
+		On by default via ``show_match_hud``; always forced on during an active cup
+		or BOTN so admins never need to flip settings for Friday cups / nightly BOTN.
+		"""
+		# Events always win: cup tracking (//cup on) or a live BOTN session.
 		if self.cup_active:
 			return True
 		botn = getattr(self.app, 'botn', None)
 		if botn and botn.active:
 			return True
-		return False
+		try:
+			return bool(await self.app.setting_show_match_hud.get_value())
+		except Exception:
+			# A failed read defaults to on so a transient error never hides the HUD.
+			return True
 
 	async def _refresh_overlays(self):
-		# Broadcast ticker (stream overlays, opt-in) and the always-on match HUD
-		# are gated independently; refresh whichever is enabled.
+		# Stream ticker (spectators + /ko stream, or everyone if show_overlays) and
+		# the always-on match HUD are gated independently.
 		ticker = getattr(self.app, 'ticker', None)
-		if getattr(self.app, '_overlays_enabled', False) and ticker is not None:
+		if ticker is not None:
 			try:
 				await ticker.refresh(self)
 			except Exception:
@@ -571,8 +580,7 @@ class LiveController:
 		await lower.flash(msg)
 
 	def _lower_third(self):
-		if not getattr(self.app, '_overlays_enabled', False):
-			return None
+		# Audience is decided in push_stream_view (spectators / opt-in / everyone).
 		return getattr(self.app, 'lower_third', None)
 
 	async def _mark(self, event, login):

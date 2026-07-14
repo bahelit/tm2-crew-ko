@@ -3,9 +3,9 @@ from pyplanet.views.template import TemplateView
 
 class CupTicker(TemplateView):
 	"""
-	Persistent broadcast ticker shown during a live Knockout match: how many
-	players remain, who is on the elimination bubble (tinted red), and a special
-	"final two" showdown treatment. Driven by LiveController.refresh().
+	Stream ticker: players remaining, elimination bubble (red), and final-two
+	showdown names. Shown to pure spectators and /ko stream opt-ins by default,
+	or to everyone when show_overlays is on. Driven by LiveController.
 	"""
 
 	template_name = 'knockout/ticker.xml'
@@ -36,7 +36,7 @@ class CupTicker(TemplateView):
 	async def refresh(self, live):
 		"""Pull the current picture from the LiveController and (re)display."""
 		if live.phase in ('idle', 'ended') or live.count <= 0:
-			await self.hide()
+			await self.app.push_stream_view(self, visible=False)
 			return
 
 		self.count = live.count
@@ -50,7 +50,7 @@ class CupTicker(TemplateView):
 		else:
 			self.racing_names = []
 
-		await self.display()
+		await self.app.push_stream_view(self, visible=True)
 
 	async def _name(self, login):
 		try:

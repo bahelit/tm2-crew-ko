@@ -498,8 +498,13 @@ class CupCommands:
 		seen = getattr(live, 'callbacks_seen', {}) or {}
 		seen_str = ' '.join('{}={}'.format(name, seen.get(name, 0)) for name in (
 			'KOPlayerAdded', 'KOPlayerRemoved', 'KORoundOrder', 'KORoundStart',
-			'KOSendWinner', 'KOMatchStandings'))
+			'KOSendWinner', 'KOMatchStandings', 'KOShieldAwarded', 'KOShieldUsed'))
 		await self.instance.chat('$bbb>>> callbacks: $fff{}'.format(seen_str), player)
+		holders = sorted(getattr(live, 'shield_holders', None) or ())
+		await self.instance.chat(
+			'$bbb>>> shields: $fff{}'.format(', '.join(holders) if holders else '(none)'),
+			player,
+		)
 		cup = getattr(getattr(app, 'cup', None), 'active_cup', None)
 		if cup is not None:
 			played = getattr(getattr(app, 'cup', None), 'maps_played', 0)

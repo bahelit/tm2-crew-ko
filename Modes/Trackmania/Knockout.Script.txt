@@ -74,7 +74,7 @@
 #Setting S_PracticeRounds		0		as _("Practice rounds before eliminations start (0 = disabled):")
 #Setting S_WarmUpNb				0		as _("Warm-up laps before the knockout begins (0 = none):")
 #Setting S_FinishCountdown		30		as _("Seconds to finish after the first player (DNFs the rest):")
-#Setting S_EnableShields		False	as _("Earned shields: round winner banks a one-time save:")
+#Setting S_EnableShields		False	as _("Earned shields: warm-up fastest banks a one-time save:")
 #Setting S_DebugBotsCount		0		as _("Number of fake players (debug only):")
 #Setting S_AdminHoldStart		False	as "<hidden>" ///< Allows event admin to pause start of the next Knockout
 #Setting S_AdminSetPause		False	as "<hidden>" ///< Allows event admin to pause match before next round
@@ -448,15 +448,16 @@ foreach (Event in PendingEvents) {
 			declare Boolean HasFinishedTrack for Event.Player;
 			HasFinishedTrack = True;
 
-			// First finisher of the round: arm the finish countdown, announce, and
-			// (Rounds) bank a shield. Setting CutOffTimeLimit drives the on-screen
-			// countdown; the base's Match_PlayLoop stops the round when it expires,
-			// and Match_EndRound DNF-knocks everyone who hadn't finished by then.
+			// First finisher of the round: arm the finish countdown and announce.
+			// Shields are earned from warm-up (fastest lap), not from round wins —
+			// see AwardWarmUpShield in StartKnockout.
+			// Setting CutOffTimeLimit drives the on-screen countdown; the base's
+			// Match_PlayLoop stops the round when it expires, and Match_EndRound
+			// DNF-knocks everyone who hadn't finished by then.
 			if (!G_FirstFinisherSeen) {
 				G_FirstFinisherSeen = True;
 				if (S_FinishCountdown > 0) CutOffTimeLimit = Now + S_FinishCountdown * 1000;
 				Notify::SendChat(["$<%1$> wins the round! %2s to finish.", Event.Player.User.Name, TL::ToText(S_FinishCountdown)]);
-				if (S_EnableShields && !Map.TMObjective_IsLapRace) AwardShield(Event.Player);
 			}
 		}
 
@@ -666,10 +667,10 @@ if (!Map.TMObjective_IsLapRace && !ServerShutdownRequested && !MatchEndRequested
 
 					declare Removed = RoundFinishTimes.remove(SlowestTime);
 					if (SlowestPlayer != Null) {
-						// A shield saves the player; the elimination passes to the
-						// next-slowest finisher instead of knocking them.
+						// A shield saves only this player and absorbs one knock slot
+						// (no cascade to the next-slowest). DNF/give-up never spend shields.
 						if (TryConsumeShield(SlowestPlayer)) {
-							// shield consumed; elimination passes to the next-slowest finisher
+							KnocksRemaining -= 1;
 						}
 						else {
 							KnockoutPlayer(SlowestPlayer, True);
@@ -868,6 +869,37 @@ Void StartKnockout() {
 		}
 		XmlRpc_KOPlayerAdded(Player);
 	}
+	// After warm-up (MB_WarmUp runs before WaitForPlayers → StartKnockout), the
+	// fastest warm-up finish on Score.BestRace earns a one-time save. Tokens were
+	// zeroed above so this is the primary earn path for Friday cups.
+	AwardWarmUpShield();
+}
+
+/** Give the player with the fastest warm-up race a one-time shield (if enabled). */
+Void AwardWarmUpShield() {
+	if (!S_EnableShields) return;
+	declare CTmPlayer BestPlayer;
+	BestPlayer = Null;
+	declare Integer BestTime;
+	BestTime = -1;
+	foreach (Player in Players) {
+		if (Player.Score == Null || Player.Score.BestRace == Null) continue;
+		declare Integer T = Player.Score.BestRace.Time;
+		if (T <= 0) continue;
+		// First-found wins ties (stable Players order).
+		if (BestTime < 0 || T < BestTime) {
+			BestTime = T;
+			BestPlayer = Player;
+		}
+	}
+	if (BestPlayer != Null) {
+		declare Integer ShieldTokens for BestPlayer;
+		if (ShieldTokens < 1) {
+			ShieldTokens = 1;
+			XmlRpc_KOShieldAwarded(BestPlayer);
+			Notify::SendChat(["$<%1$> earns a shield for the fastest warm-up!", BestPlayer.User.Name]);
+		}
+	}
 }
 
 /** Give a player a one-time shield (capped at one), if shields are enabled. */
@@ -877,7 +909,7 @@ Void AwardShield(CTmPlayer _Player) {
 	if (ShieldTokens < 1) {
 		ShieldTokens = 1;
 		XmlRpc_KOShieldAwarded(_Player);
-		Notify::SendChat(["$<%1$> earns a shield for winning the round!", _Player.User.Name]);
+		Notify::SendChat(["$<%1$> earns a shield!", _Player.User.Name]);
 	}
 }
 

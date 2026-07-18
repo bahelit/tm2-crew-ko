@@ -156,3 +156,18 @@ def ko_per_round_label(double_until, players):
 	if double_until and players > double_until:
 		return '2 UNTIL {} PLAYERS'.format(double_until)
 	return '1'
+
+
+# Font-safe shield marker (U+271A). The shield emoji does not render in ManiaPlanet.
+SHIELD_MARK = '✚'
+
+
+def format_hud_name(name, has_shield=False):
+	"""Player name as shown on a match-HUD row. When ``has_shield`` is true, append
+	a compact ✚ so everyone can see who still holds a one-time save."""
+	text = name if name is not None else ''
+	if has_shield:
+		if text:
+			return '{} {}'.format(text, SHIELD_MARK)
+		return SHIELD_MARK
+	return text

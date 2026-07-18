@@ -80,11 +80,15 @@ class LiveController:
 		self._double_until = 0
 		self._order_signal = None
 		self._round_signal = None
+		# Logins that currently hold a one-time shield (warm-up fastest, etc.).
+		# Driven by KOShieldAwarded / KOShieldUsed; cleared each map.
+		self.shield_holders = set()
 		# Diagnostics surfaced by //ko hud: how many of each mode callback we have
 		# received, and the last HUD refresh error (if any).
 		self.callbacks_seen = {
 			'KOPlayerAdded': 0, 'KOPlayerRemoved': 0, 'KOSendWinner': 0,
 			'KORoundOrder': 0, 'KORoundStart': 0, 'KOMatchStandings': 0,
+			'KOShieldAwarded': 0, 'KOShieldUsed': 0,
 		}
 		# Last exception raised by the real HUD refresh path, surfaced by //ko hud.
 		# The test render (show_test) reports its own errors to chat, but the real
@@ -152,6 +156,7 @@ class LiveController:
 		self.best_times = {}
 		self.cp_best = {}
 		self.cp_feed = []
+		self.shield_holders = set()
 		# Only show the HUD while a Knockout mode is loaded.
 		self.is_knockout = await self._read_is_knockout()
 		# Number this match for the HUD title ("MATCH n").
@@ -393,14 +398,22 @@ class LiveController:
 		await self._refresh_overlays()
 
 	async def on_shield_awarded(self, signal=None, **kwargs):
+		self.callbacks_seen['KOShieldAwarded'] = self.callbacks_seen.get('KOShieldAwarded', 0) + 1
 		login = first_login(kwargs.get('player_login') or kwargs.get('login'))
+		if login:
+			self.shield_holders.add(login)
 		await self._flash_shield(login, awarded=True)
 		await self._mark('shield_awarded', login)
+		await self._refresh_overlays()
 
 	async def on_shield_used(self, signal=None, **kwargs):
+		self.callbacks_seen['KOShieldUsed'] = self.callbacks_seen.get('KOShieldUsed', 0) + 1
 		login = first_login(kwargs.get('player_login') or kwargs.get('login'))
+		if login:
+			self.shield_holders.discard(login)
 		await self._flash_shield(login, awarded=False)
 		await self._mark('shield_used', login)
+		await self._refresh_overlays()
 
 	# --------------------------------------------------------------- derived
 
@@ -574,7 +587,7 @@ class LiveController:
 		# shield emoji is supplementary-plane and showed as an empty box. Matches the
 		# ❌/★ glyphs used by the elimination/winner flashes above.
 		if awarded:
-			msg = '$09f✚ $fff{}$09f earned a shield!'.format(name)
+			msg = '$09f✚ $fff{}$09f earned a shield (fastest warm-up)!'.format(name)
 		else:
 			msg = '$09f✚ $fff{}$09f used a shield to survive!'.format(name)
 		await lower.flash(msg)

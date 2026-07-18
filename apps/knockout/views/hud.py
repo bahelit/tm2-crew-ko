@@ -1,8 +1,8 @@
 from pyplanet.views.template import TemplateView
 
 from ..hud_format import (
-	format_race_time, format_gap, match_label, round_value, ko_per_round_label,
-	hud_applies, is_practice_phase, ml_num,
+	format_race_time, format_gap, format_hud_name, match_label, round_value,
+	ko_per_round_label, hud_applies, is_practice_phase, ml_num,
 )
 
 # Layout mirrors the BOTN countdown: a title tab (TITLE_H) then a body panel.
@@ -120,6 +120,7 @@ class MatchHud(TemplateView):
 		else:
 			self.round_text = round_value(getattr(live, 'round', 0), getattr(live, 'total_rounds', 0))
 		danger = set() if practice else set(live.danger_logins())
+		shields = set(getattr(live, 'shield_holders', None) or ())
 
 		# Points column (running cup total) is part of the CotD-style match HUD during
 		# an active cup/BOTN: always on from map 1 (zeros until a map is recorded), so
@@ -174,7 +175,7 @@ class MatchHud(TemplateView):
 				gap=False,
 				danger=is_danger,
 				rank=index + 1,
-				name=await self._name(login),
+				name=format_hud_name(await self._name(login), has_shield=(login in shields)),
 				time=time_text,
 				# Names stay white so the clan-tag colours show; the danger zone reads
 				# as red times below the divider, matching the cup-of-the-day style.

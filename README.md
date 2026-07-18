@@ -58,7 +58,7 @@ During cups and BOTN the player HUD package is always on (no admin toggles neede
 
 **Stream box:** the ticker + elimination lower-third go to **pure spectators automatically** (your dedicated spectator capture client). During warm-up the ticker shows `PRACTICE`; during rounds it shows racing count / danger bubble. Racers do not see them. If the stream machine is not a pure spectator, run `/ko stream on` (or `/ko stream status` to check). Admins can push them to *everyone* with `show_overlays` in `//settings`.
 
-Shields (earned one-time saves) are a mode setting — enabled in the Friday preset, off for BOTN.
+**Shields** (Friday preset on, BOTN off): after the map’s warm-up laps, the **fastest warm-up finish** earns one save. It is spent only when that player would be eliminated as last place (not on DNF/give-up), and it does **not** push the knock onto the next player. The left match HUD shows `✚` next to holders until the shield is used. Deploy both `apps/knockout/` and `Modes/Trackmania/Knockout.Script.txt` for this to take effect.
 
 ### Bowl of the Night (BOTN)
 

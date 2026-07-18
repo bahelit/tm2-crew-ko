@@ -130,6 +130,13 @@ def test_ko_per_round_label():
 	assert hud.ko_per_round_label(0, 14) == '1'
 
 
+def test_format_hud_name_shield_marker():
+	assert hud.format_hud_name('Alice', has_shield=False) == 'Alice'
+	assert hud.format_hud_name('Alice', has_shield=True) == 'Alice ✚'
+	assert hud.format_hud_name('', has_shield=True) == '✚'
+	assert hud.format_hud_name(None, has_shield=False) == ''
+
+
 if __name__ == '__main__':
 	import sys
 	import traceback

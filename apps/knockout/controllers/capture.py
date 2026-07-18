@@ -19,6 +19,39 @@ def _player_country(player):
 	return getattr(flow, 'zone', None) or getattr(flow, 'country', None)
 
 
+def should_arm_cup_handoff(maps_played, map_count):
+	"""True when the standings about to be recorded will finish a fixed-length cup.
+
+	``maps_played`` is how many maps are already linked to the cup *before* this
+	record; this standings event is the next one. Open-ended cups (map_count 0)
+	never auto-arm TimeAttack.
+	"""
+	try:
+		target = int(map_count or 0)
+		played = int(maps_played or 0)
+	except (TypeError, ValueError):
+		return False
+	if target <= 0:
+		return False
+	return played >= target - 1
+
+
+def orphan_match_id(queue, last_match_id, captured):
+	"""Return a match id that was allocated but never recorded, or None.
+
+	Prefers the oldest queued id (FIFO standings), then the last allocated id.
+	"""
+	captured = set(captured or ())
+	if queue:
+		candidate = queue[0]
+		if candidate not in captured:
+			return candidate
+		return None
+	if last_match_id is not None and last_match_id not in captured:
+		return last_match_id
+	return None
+
+
 class CaptureController:
 	"""
 	Records each finished Knockout map as a MatchInfo row plus one PlayerScore
@@ -43,6 +76,10 @@ class CaptureController:
 		self.app.context.signals.listen(mp_signals.map.map_start, self.on_map_start)
 
 	async def on_map_start(self, *args, **kwargs):
+		# Capture registers map_start before LiveController, so live still holds the
+		# previous map's racing/eliminated state here. Salvage first, then allocate.
+		await self._salvage_unrecorded_match()
+
 		# Allocate a stable identifier for the match that is about to be played.
 		match_id = allocate_match_start_time(self._last_match_id)
 		self._last_match_id = match_id
@@ -53,6 +90,54 @@ class CaptureController:
 		if not standings:
 			logger.warning('Knockout: KOMatchStandings fired with no standings')
 			return
+		# Surface receipt in //ko hud so admins can confirm the scoring callback.
+		live = getattr(self.app, 'live', None)
+		if live is not None and getattr(live, 'callbacks_seen', None) is not None:
+			live.callbacks_seen['KOMatchStandings'] = (
+				live.callbacks_seen.get('KOMatchStandings', 0) + 1)
+		await self.record_match(standings)
+
+	async def _salvage_unrecorded_match(self):
+		"""If the previous Knockout map rotated without KOMatchStandings, force-record
+		from the live HUD state so the active cup still gets points.
+
+		Common when the mode is stuck and an admin //skips, or when an older mode
+		script never emits Match_EndMap. No-op when there is no active cup, no
+		orphan match id, or nothing useful in the live picture.
+		"""
+		cup = getattr(getattr(self.app, 'cup', None), 'active_cup', None)
+		if cup is None:
+			return
+		live = getattr(self.app, 'live', None)
+		if live is None or not getattr(live, 'is_knockout', False):
+			return
+
+		# Prefer the oldest queued (not yet consumed) id; fall back to the last
+		# allocated id when the queue was already drained without a capture.
+		orphan_id = orphan_match_id(
+			self._match_start_queue, self._match_start_time, self._captured)
+		if orphan_id is None:
+			return
+
+		standings = live.synth_standings()
+		if not standings:
+			logger.warning(
+				'Knockout: map rotated with cup active but match %s was never recorded '
+				'and live standings are empty (KOMatchStandings missing?)',
+				orphan_id,
+			)
+			return
+
+		# record_match dequeues FIFO; if the id only lived on ``_match_start_time``
+		# (queue already empty), put it back so scores land under the orphaned id.
+		if not self._match_start_queue or self._match_start_queue[0] != orphan_id:
+			self._match_start_queue.appendleft(orphan_id)
+
+		logger.warning(
+			'Knockout: map rotated without KOMatchStandings; salvaging %d live '
+			'standings for match %s',
+			len(standings), orphan_id,
+		)
 		await self.record_match(standings)
 
 	async def record_match(self, standings):
@@ -116,14 +201,17 @@ class CaptureController:
 			botn.arm_handoff_immediately()
 			asyncio.ensure_future(self.app.queue_timeattack())
 			return
-		cup = getattr(getattr(self.app, 'cup', None), 'active_cup', None)
+		cup_ctrl = getattr(self.app, 'cup', None)
+		cup = getattr(cup_ctrl, 'active_cup', None) if cup_ctrl else None
 		if cup is None:
 			return
 		target = cup.map_count
 		if not target:
 			return
-		# Last map of a fixed-length cup: same rotation race as BOTN. ``_captured``
-		# holds all maps already recorded; this standings event is for the next one.
-		if len(self._captured) >= target - 1:
+		# Last map of a fixed-length cup: same rotation race as BOTN. Count only maps
+		# already linked to *this* cup (not session-wide ``_captured``, which also
+		# holds earlier BOTN / other matches and would arm TA mid-cup).
+		played = int(getattr(cup_ctrl, 'maps_played', 0) or 0)
+		if should_arm_cup_handoff(played, target):
 			self.app.arm_cup_handoff_immediately()
 			asyncio.ensure_future(self.app.queue_timeattack())

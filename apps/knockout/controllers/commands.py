@@ -151,10 +151,21 @@ class CupCommands:
 			cup_key=data.key, name=name, map_count=map_count, score_mode=score_mode,
 			mode_script=mode_script,
 		)
+		raw_mapcount = cup_cfg.get('mapcount')
+		if map_count and raw_mapcount is not None and str(raw_mapcount).strip().lower() == 'all':
+			count_label = '{} maps (whole playlist)'.format(map_count)
+		elif map_count:
+			count_label = '{} maps'.format(map_count)
+		else:
+			count_label = 'open-ended (use //cup mapcount to set a limit)'
 		await self.instance.chat(
 			'$ff0>>> $fff{}$ff0 started a cup: $fff{}$ff0 (edition {}, {}).'.format(
-				player.nickname, cup.name, cup.edition,
-				'{} maps'.format(map_count) if map_count else 'open-ended')
+				player.nickname, cup.name, cup.edition, count_label)
+		)
+		await self.instance.chat(
+			'$bbb>>> Points update after each knockout map finishes (chat: "map X recorded"). '
+			'Stream box: pure spectator or $fff/ko stream on$bbb.',
+			player,
 		)
 		await self.app.update_widget()
 		await self._refresh_hud_season()
@@ -173,17 +184,24 @@ class CupCommands:
 	async def cmd_end(self, player, data, **kwargs):
 		"""Force-complete the active cup (fallback for when auto-complete did not fire).
 
-		Also recovers a stuck knockout: after completing the cup, force the server back
-		to TimeAttack immediately. The completion path only *queues* TimeAttack for the
-		next map, which a stuck knockout never reaches -- the explicit reload guarantees
-		the server leaves the knockout even if the mode is not rotating maps on its own."""
+		Also recovers a stuck knockout: best-effort record the live map first (same as
+		//botn end), then complete the cup and force TimeAttack immediately. Without
+		force-record, ending mid-map left zero scores even after a full race.
+		"""
 		cup = self.cup.active_cup
 		if not cup:
 			await self.instance.chat('$f00>>> No active cup.', player)
 			return
 		await self.instance.chat(
 			'$ff0>>> $fff{}$ff0 is ending the cup $fff{}$ff0.'.format(player.nickname, cup.name))
-		await self.cup.complete_cup()
+		# Save the current map if KOMatchStandings never fired (stuck KO / early end).
+		recorded = await self.app.force_record_current_match(reason='cup end')
+		if recorded:
+			await self.instance.chat(
+				'$ff0>>> Saved live standings for the current map before ending.', player)
+		# complete_cup is a no-op if force_record already finished a fixed-length cup.
+		if self.cup.active_cup:
+			await self.cup.complete_cup()
 		await self.app.hide_widget()
 		await self._refresh_hud_season()
 		await self.app.return_to_timeattack()
@@ -479,8 +497,18 @@ class CupCommands:
 		# plugin at all (all zero => the mode/server is not delivering them).
 		seen = getattr(live, 'callbacks_seen', {}) or {}
 		seen_str = ' '.join('{}={}'.format(name, seen.get(name, 0)) for name in (
-			'KOPlayerAdded', 'KOPlayerRemoved', 'KORoundOrder', 'KORoundStart', 'KOSendWinner'))
+			'KOPlayerAdded', 'KOPlayerRemoved', 'KORoundOrder', 'KORoundStart',
+			'KOSendWinner', 'KOMatchStandings'))
 		await self.instance.chat('$bbb>>> callbacks: $fff{}'.format(seen_str), player)
+		cup = getattr(getattr(app, 'cup', None), 'active_cup', None)
+		if cup is not None:
+			played = getattr(getattr(app, 'cup', None), 'maps_played', 0)
+			target = getattr(cup, 'map_count', 0) or 0
+			await self.instance.chat(
+				'$bbb>>> cup maps_played=$fff{}$bbb map_count=$fff{}$bbb cup_active=$fff{}$bbb'.format(
+					played, target or 'open', getattr(live, 'cup_active', False)),
+				player,
+			)
 		if last_err:
 			await self.instance.chat(
 				'$f00>>> Last real HUD refresh error: $fff{}$f00 (this is why it is blank).'.format(last_err),

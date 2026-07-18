@@ -6,6 +6,13 @@
 		textsize="2" textfont="GameFontBlack" textcolor="FF2222" text="FINAL 2 — SHOWDOWN" />
 	<label pos="0. -5.5." size="68. 3." halign="center" valign="top" z-index="1"
 		textsize="1" textcolor="FFFFFF" text="{{ racing_names|join('   vs   ') }}" />
+	{% elif practice %}
+	<quad pos="0. 0." size="50. 9." halign="center" valign="top" z-index="-1"
+		style="Bgs1InRace" substyle="BgCardSystem" opacity="0.7" />
+	<label pos="0. -1.5." size="48. 4." halign="center" valign="top" z-index="1"
+		textsize="2" textfont="GameFontBlack" textcolor="66CCFF" text="PRACTICE" />
+	<label pos="0. -5.5." size="48. 3." halign="center" valign="top" z-index="1"
+		textsize="1" textcolor="FFFFFF" text="{{ count }} ON SERVER" />
 	{% else %}
 	<quad pos="0. 0." size="46. {{ 6 + danger_rows|length * 3 }}." halign="center" valign="top" z-index="-1"
 		style="Bgs1InRace" substyle="BgCardSystem" opacity="0.7" />

@@ -40,7 +40,9 @@ A multi-map competition. Each map is one knockout match; placements earn cup poi
 
 That one command stops any running BOTN, loads the Knockout mode with the Friday settings (warm-up, shields, …), and starts a cup that spans the whole playlist. (`//cup setup knockout_friday` is still available if you only want to load the mode without starting a cup.)
 
-The cup auto-completes after every map in the playlist has been played, announces the top 3, and returns to TimeAttack.
+**Deploy both the app and the mode script.** Cup points and auto-complete only fire when Knockout finishes a map and emits `KOMatchStandings`. That requires the repo’s `Modes/Trackmania/Knockout.Script.txt` on the dedicated server (not only `apps/knockout/`). An old mode script can loop rounds forever so maps never score.
+
+The cup auto-completes after every map in the playlist has been **recorded** (chat: `Cup … — map X / Y recorded`), announces the top 3, and returns to TimeAttack. Points on the left HUD update after each recorded map — not mid-race.
 
 | Map count | Behaviour |
 |---|---|
@@ -48,11 +50,13 @@ The cup auto-completes after every map in the playlist has been played, announce
 | `7` (or any number) | Completes after that many maps |
 | `0` | Open-ended — never auto-completes |
 
-A plain `//cup on` with no preset defaults to open-ended. Use a preset or `//cup mapcount all`. If a fixed-length cup does not auto-complete, use `//cup end`.
+A plain `//cup on` with no preset defaults to open-ended. Use a preset or `//cup mapcount all`. If a fixed-length cup does not auto-complete, use `//cup end` (best-effort saves the current map first, same idea as `//botn end`).
 
-During cups and BOTN the player HUD package is always on (no admin toggles needed): left-side match board (practice times in TimeAttack, then live knockout order with cup points), bottom checkpoint splits during rounds, and the finish countdown.
+**Smoke test:** `//cup on quick` or `//cup on friday` then `//cup mapcount 1`, finish one knockout map, confirm chat `map 1 / 1 recorded` and `//cup results` has points. `//ko hud` should show `KOMatchStandings` ≥ 1 after a finished map.
 
-**Stream box:** the ticker + elimination lower-third go to **pure spectators automatically** (your dedicated spectator capture client). Racers do not see them. On the stream machine you can also run `/ko stream on` to force them for that login, or `/ko stream status` to check. Admins can push them to *everyone* with `show_overlays` in `//settings`.
+During cups and BOTN the player HUD package is always on (no admin toggles needed): left-side match board (practice times / warm-up, then live knockout order with cup points), bottom checkpoint **splits during scored KO rounds** (not during warm-up), and the finish countdown.
+
+**Stream box:** the ticker + elimination lower-third go to **pure spectators automatically** (your dedicated spectator capture client). During warm-up the ticker shows `PRACTICE`; during rounds it shows racing count / danger bubble. Racers do not see them. If the stream machine is not a pure spectator, run `/ko stream on` (or `/ko stream status` to check). Admins can push them to *everyone* with `show_overlays` in `//settings`.
 
 Shields (earned one-time saves) are a mode setting — enabled in the Friday preset, off for BOTN.
 

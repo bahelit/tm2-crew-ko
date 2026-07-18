@@ -15,6 +15,8 @@ class CupController:
 		self.app = app
 		self.instance = app.instance
 		self.active_cup = None
+		# Maps already linked to the active cup (sync cache for capture TA-handoff).
+		self.maps_played = 0
 
 	async def on_start(self):
 		await self._ensure_schema()
@@ -23,8 +25,12 @@ class CupController:
 		))
 		self.active_cup = rows[0] if rows else None
 		if self.active_cup:
-			logger.info('Knockout: resumed active cup "%s" (edition %s)',
-				self.active_cup.name, self.active_cup.edition)
+			matches = await self.cup_matches(self.active_cup)
+			self.maps_played = len(matches)
+			logger.info('Knockout: resumed active cup "%s" (edition %s, maps_played=%s)',
+				self.active_cup.name, self.active_cup.edition, self.maps_played)
+		else:
+			self.maps_played = 0
 
 	async def _ensure_schema(self):
 		"""Self-healing schema guard for the knockout_cup table.
@@ -91,6 +97,7 @@ class CupController:
 		)
 		await cup.save()
 		self.active_cup = cup
+		self.maps_played = 0
 		logger.info('Knockout: started cup "%s" edition %s (map_count=%s)', cup.name, edition, map_count)
 		return cup
 
@@ -101,6 +108,7 @@ class CupController:
 		cup.is_active = False
 		await cup.save()
 		self.active_cup = None
+		self.maps_played = 0
 		logger.info('Knockout: stopped cup "%s"', cup.name)
 		return cup
 
@@ -176,6 +184,7 @@ class CupController:
 			counts=True,
 		))
 		played = index + 1
+		self.maps_played = played
 
 		target = self.active_cup.map_count
 		progress = '{} / {}'.format(played, target) if target else str(played)

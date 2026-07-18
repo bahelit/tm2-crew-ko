@@ -84,7 +84,7 @@ class LiveController:
 		# received, and the last HUD refresh error (if any).
 		self.callbacks_seen = {
 			'KOPlayerAdded': 0, 'KOPlayerRemoved': 0, 'KOSendWinner': 0,
-			'KORoundOrder': 0, 'KORoundStart': 0,
+			'KORoundOrder': 0, 'KORoundStart': 0, 'KOMatchStandings': 0,
 		}
 		# Last exception raised by the real HUD refresh path, surfaced by //ko hud.
 		# The test render (show_test) reports its own errors to chat, but the real

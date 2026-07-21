@@ -850,32 +850,8 @@ Void XmlRpc_KOShieldUsed(CTmPlayer _Player) {
 // Knockout
 // ---------------------------------- //
 
-/// Start a new Knockout (seed the racing set + shields).
-Void StartKnockout() {
-	G_PlayersRacing.clear();
-	G_RoundsPlayed = 0;
-	// Logins pre-granted a shield this match (e.g. the BOTD fastest-practice time).
-	declare Text[] PreShieldLogins = TL::Split(", ", S_PreShieldLogins);
-	foreach (Player in Players) {
-		G_PlayersRacing.add(Player.User.Login);
-		// Fresh knockout: zero the survival score (match-points bucket drives the
-		// scoreboard Points column — see Match_StartServer SaveInScore).
-		if (Player.Score != Null) Scores::SetPlayerMatchPoints(Player.Score, 0);
-		declare Integer ShieldTokens for Player;
-		ShieldTokens = 0;
-		if (S_EnableShields && PreShieldLogins.exists(Player.User.Login)) {
-			ShieldTokens = 1;
-			XmlRpc_KOShieldAwarded(Player);
-		}
-		XmlRpc_KOPlayerAdded(Player);
-	}
-	// After warm-up (MB_WarmUp runs before WaitForPlayers → StartKnockout), the
-	// fastest warm-up finish on Score.BestRace earns a one-time save. Tokens were
-	// zeroed above so this is the primary earn path for Friday cups.
-	AwardWarmUpShield();
-}
-
-/** Give the player with the fastest warm-up race a one-time shield (if enabled). */
+/** Give the player with the fastest warm-up race a one-time shield (if enabled).
+    Must be defined before StartKnockout (ManiaScript resolves callees top-down). */
 Void AwardWarmUpShield() {
 	if (!S_EnableShields) return;
 	declare CTmPlayer BestPlayer;
@@ -900,6 +876,31 @@ Void AwardWarmUpShield() {
 			Notify::SendChat(["$<%1$> earns a shield for the fastest warm-up!", BestPlayer.User.Name]);
 		}
 	}
+}
+
+/// Start a new Knockout (seed the racing set + shields).
+Void StartKnockout() {
+	G_PlayersRacing.clear();
+	G_RoundsPlayed = 0;
+	// Logins pre-granted a shield this match (e.g. the BOTD fastest-practice time).
+	declare Text[] PreShieldLogins = TL::Split(", ", S_PreShieldLogins);
+	foreach (Player in Players) {
+		G_PlayersRacing.add(Player.User.Login);
+		// Fresh knockout: zero the survival score (match-points bucket drives the
+		// scoreboard Points column — see Match_StartServer SaveInScore).
+		if (Player.Score != Null) Scores::SetPlayerMatchPoints(Player.Score, 0);
+		declare Integer ShieldTokens for Player;
+		ShieldTokens = 0;
+		if (S_EnableShields && PreShieldLogins.exists(Player.User.Login)) {
+			ShieldTokens = 1;
+			XmlRpc_KOShieldAwarded(Player);
+		}
+		XmlRpc_KOPlayerAdded(Player);
+	}
+	// After warm-up (MB_WarmUp runs before WaitForPlayers → StartKnockout), the
+	// fastest warm-up finish on Score.BestRace earns a one-time save. Tokens were
+	// zeroed above so this is the primary earn path for Friday cups.
+	AwardWarmUpShield();
 }
 
 /** Give a player a one-time shield (capped at one), if shields are enabled. */

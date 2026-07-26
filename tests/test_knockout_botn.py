@@ -139,6 +139,37 @@ def test_countdown_marks_below_total():
 	assert used_30 == [10]
 
 
+# ----------------------------------------------------------- practice_map_action
+
+def test_practice_map_action_force_ta_wins():
+	# Post-knockout handoff always reloads TA, even mid-practice phase.
+	assert botn.practice_map_action('practice', True, 'map-a', 'map-b') == 'force_ta'
+	assert botn.practice_map_action('knockout', True, 'map-a', 'map-a') == 'force_ta'
+
+
+def test_practice_map_action_snap_back_on_drift():
+	assert botn.practice_map_action('practice', False, 'map-a', 'map-b') == 'snap_back'
+	assert botn.practice_map_action('countdown', False, 'map-a', 'map-b') == 'snap_back'
+
+
+def test_practice_map_action_hold_on_pinned_map():
+	assert botn.practice_map_action('practice', False, 'map-a', 'map-a') == 'hold'
+	assert botn.practice_map_action('countdown', False, 'map-a', 'map-a') == 'hold'
+	# No pin yet: hold and let the controller pin current.
+	assert botn.practice_map_action('practice', False, None, 'map-a') == 'hold'
+	assert botn.practice_map_action('practice', False, 'map-a', None) == 'hold'
+
+
+def test_practice_map_action_idle_outside_practice():
+	assert botn.practice_map_action('knockout', False, 'map-a', 'map-b') == 'idle'
+	assert botn.practice_map_action('idle', False, 'map-a', 'map-b') == 'idle'
+
+
+def test_practice_timelimit_is_open_ended():
+	# Stock TimeAttack defaults to 300s; practice must disable the cutoff.
+	assert botn.PRACTICE_TIMELIMIT == 0
+
+
 if __name__ == '__main__':
 	import sys
 	import traceback

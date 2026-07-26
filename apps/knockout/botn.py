@@ -33,9 +33,10 @@ TIMEATTACK_SCRIPT = 'TimeAttack.Script.txt'
 # BOTN practice is open-ended: the wall-clock cutoff ends it, not the map's own timer.
 # Stock TimeAttack defaults S_TimeLimit to 300s, so left alone the practice map would
 # auto-advance to the next playlist map every 5 minutes. Setting it to 0 disables that
-# auto-advance (TimeAttack's SetTimeLimit installs no cutoff for a non-positive value),
-# so the same map holds through the whole practice phase until BOTN switches it to the
-# knockout. The server's normal limit is captured before we override and restored on stop.
+# auto-advance (TimeAttack's SetTimeLimit installs no cutoff for a non-positive value).
+# Re-applied on every practice map_start (PyPlanet stages next-settings only on
+# server_start, not RestartMap). If the playlist still advances, on_map_start jumps
+# back to the pinned practice map. Resting S_TimeLimit is restored on //botn off.
 PRACTICE_TIMELIMIT = 0
 
 
@@ -99,6 +100,24 @@ def human_duration(seconds):
 	return '{}s'.format(seconds)
 
 
+def practice_map_action(phase, force_ta_next, practice_uid, current_uid):
+	"""Decide what ``on_map_start`` should do for a live BOTN session.
+
+	Returns one of:
+	  * ``'force_ta'`` — post-knockout handoff: reload this map in TimeAttack and pin it.
+	  * ``'snap_back'`` — practice/countdown drifted off tonight's map; jump back.
+	  * ``'hold'`` — still on the pinned map (or no pin yet); re-apply open-ended TA limit.
+	  * ``'idle'`` — not in a phase that needs practice-map enforcement.
+	"""
+	if force_ta_next:
+		return 'force_ta'
+	if phase not in ('practice', 'countdown'):
+		return 'idle'
+	if practice_uid and current_uid and practice_uid != current_uid:
+		return 'snap_back'
+	return 'hold'
+
+
 # Remaining-time marks (seconds) at which the countdown re-announces. Only those
 # strictly below the total countdown are used, so a 30s countdown warns at 10s and a
 # 15-minute one steps down through 10m / 5m / 2m / 1m / 30s / 10s.
@@ -120,6 +139,11 @@ class BotnController:
 		self.cutoff_ts = None      # epoch seconds of the cutoff
 		self._task = None          # asyncio waiter for the cutoff
 		self._resting_timelimit = None  # server's normal TA S_TimeLimit, to restore on stop
+		# Tonight's practice map (UID). Practice must not advance the playlist; if the
+		# 5-minute stock TA timer still fires, on_map_start snaps back here.
+		self._practice_map_uid = None
+		# Guard against a failed JumpToMapIdent looping map_start forever.
+		self._snap_back_uid = None
 		# Countdown-overlay state, so a player who connects mid-countdown can be sent
 		# the overlay with their correct remaining time (the BOTN auto-starts at boot
 		# with nobody connected, so the initial display() reaches no one).
@@ -170,31 +194,57 @@ class BotnController:
 			logger.exception('Knockout: BOTN countdown re-send on connect failed')
 
 	async def on_map_start(self, *args, **kwargs):
-		"""Enforce the knockout->TimeAttack handoff. on_knockout_recorded queues
-		TimeAttack as the next script, but a queued script alone does not switch the
-		running mode on a normal map rotation -- only a map reload applies it (the
-		practice->knockout handoff uses RestartMap for exactly this reason). So when this
-		(the first map after a recorded knockout) opens, reload it in TimeAttack.
+		"""Keep BOTN practice on tonight's map with an open-ended TimeAttack limit.
 
-		The reload is unconditional rather than gated on a live get_current_script() read:
-		queue_timeattack already set TimeAttack as the *next* script, so a script query at
-		this point can report the queued TimeAttack while the map is in fact still running
-		Knockout -- which would make a 'skip if not knockout' guard bail and leave the map
-		stuck in Knockout (the bug this fixes). Reloading regardless is safe: if TimeAttack
-		is somehow already live it is just a harmless restart of the practice map before
-		anyone has a meaningful run."""
-		if not (self.active and self._force_ta_next_map):
+		Two jobs:
+		1. Post-knockout handoff (``_force_ta_next_map``): a queued next-script alone does
+		   not switch the running mode on a plain rotation, so reload this map in
+		   TimeAttack and pin it as the new night's practice map.
+		2. Practice/countdown hold: re-apply ``S_TimeLimit=0`` every map start (staging via
+		   ``update_next_settings`` only flushes on server_start, so a one-shot write at
+		   practice load can miss). If the playlist still advanced, jump back to the pin.
+		"""
+		if not self.active:
 			return
-		self._force_ta_next_map = False
-		# Hold this map open through the practice phase (open-ended limit), then reload it
-		# in TimeAttack. _load_script does set_next_script + RestartMap, whose map reload
-		# is what actually applies the new script.
-		settings = {'S_TimeLimit': PRACTICE_TIMELIMIT}
-		await self._apply_mode_settings(settings, stage=True)
-		await self._load_script(TIMEATTACK_SCRIPT)
-		if await self._await_script(TIMEATTACK_SCRIPT):
-			await self._apply_mode_settings(settings, stage=False)
-		logger.info('Knockout: BOTN forced TimeAttack on the post-knockout map')
+		current_uid = self._current_map_uid()
+		action = practice_map_action(
+			self.phase, self._force_ta_next_map, self._practice_map_uid, current_uid)
+
+		if action == 'force_ta':
+			self._force_ta_next_map = False
+			self._snap_back_uid = None
+			# Hold this map open through the practice phase (open-ended limit), then reload
+			# it in TimeAttack. _load_script does set_next_script + RestartMap, whose map
+			# reload is what actually applies the new script.
+			await self._hold_practice_timelimit(restart=True)
+			self._pin_practice_map()
+			logger.info('Knockout: BOTN forced TimeAttack on the post-knockout map')
+			return
+
+		if action == 'idle':
+			return
+
+		if action == 'snap_back':
+			# JumpToMapIdent fires another map_start; if we already tried this pin from
+			# this drifted map and are still wrong, stop to avoid a loop.
+			if self._snap_back_uid == self._practice_map_uid:
+				logger.warning(
+					'Knockout: BOTN practice snap-back to %s failed (still on %s); giving up',
+					self._practice_map_uid, current_uid)
+				self._snap_back_uid = None
+				return
+			self._snap_back_uid = self._practice_map_uid
+			logger.info(
+				'Knockout: BOTN practice map drifted to %s; jumping back to %s',
+				current_uid, self._practice_map_uid)
+			await self._jump_to_practice_map()
+			return
+
+		# hold: correct map (or no pin yet) — re-apply open-ended limit and ensure pin.
+		self._snap_back_uid = None
+		if not self._practice_map_uid:
+			self._pin_practice_map()
+		await self._hold_practice_timelimit(restart=False)
 
 	async def _maybe_resume(self):
 		cup = getattr(self.app.cup, 'active_cup', None)
@@ -212,7 +262,8 @@ class BotnController:
 		# map until the cutoff instead of cycling on the stock 5-minute timer.
 		self.active, self.phase = True, 'practice'
 		await self._capture_resting_timelimit()
-		await self._apply_mode_settings({'S_TimeLimit': PRACTICE_TIMELIMIT}, stage=False)
+		await self._hold_practice_timelimit(restart=False)
+		self._pin_practice_map()
 		await self._arm_from_setting()
 		await self._arm_practice_overlay()
 		logger.info('Knockout: resumed BOTN practice, cutoff re-armed')
@@ -239,7 +290,9 @@ class BotnController:
 
 		self.best = {}
 		self.active, self.phase = True, 'practice'
+		self._snap_back_uid = None
 		await self._load_practice_script()
+		self._pin_practice_map()
 		self._arm_cutoff()
 		await self._arm_practice_overlay()
 		await self.app.commands._refresh_hud_season()
@@ -257,6 +310,8 @@ class BotnController:
 		await self._hide_countdown_overlay()
 		self.active, self.phase = False, 'idle'
 		self.best = {}
+		self._practice_map_uid = None
+		self._snap_back_uid = None
 		await self.start()
 
 	async def stop(self, player=None):
@@ -265,8 +320,12 @@ class BotnController:
 			return
 		self._cancel_task()
 		await self._hide_countdown_overlay()
+		# Land //botn off on tonight's map if practice drifted, then clear the pin.
+		await self._ensure_practice_map()
 		self.active, self.phase = False, 'idle'
 		self.best = {}
+		self._practice_map_uid = None
+		self._snap_back_uid = None
 		await self.app.cup.stop_cup()
 		# Drop the server back to its TimeAttack resting state, restoring the normal map
 		# time limit we suppressed for the open-ended practice phase.
@@ -323,11 +382,8 @@ class BotnController:
 		practice phase and re-armed the cutoff/overlay; this just forces the live mode
 		switch, so the one-shot map-rotation handoff is cleared to avoid a double reload."""
 		self._force_ta_next_map = False
-		settings = {'S_TimeLimit': PRACTICE_TIMELIMIT}
-		await self._apply_mode_settings(settings, stage=True)
-		await self._load_script(TIMEATTACK_SCRIPT)
-		if await self._await_script(TIMEATTACK_SCRIPT):
-			await self._apply_mode_settings(settings, stage=False)
+		await self._hold_practice_timelimit(restart=True)
+		self._pin_practice_map()
 
 	async def on_knockout_recorded(self):
 		"""The night's knockout map just finished (its standings were recorded). Return
@@ -350,8 +406,10 @@ class BotnController:
 
 		self.phase = 'practice'
 		self.best = {}
+		self._snap_back_uid = None
 		# Stage the open-ended time limit so the next night's practice map holds until its
-		# cutoff instead of cycling on the stock 5-minute TimeAttack timer.
+		# cutoff instead of cycling on the stock 5-minute TimeAttack timer. (Staging only
+		# flushes on server_start; on_map_start / _hold_practice_timelimit re-apply live.)
 		await self._apply_mode_settings({'S_TimeLimit': PRACTICE_TIMELIMIT}, stage=True)
 		if self.app.playlist_length() <= 1:
 			# Single-map playlist: there is no real rotation, so the mode loops a fresh
@@ -359,15 +417,16 @@ class BotnController:
 			# hook below would then never run and the knockout would replay (the reported
 			# bug). Force the switch to TimeAttack now via the proven RestartMap reload, then
 			# push the open-ended limit straight onto the running script.
-			await self._load_script(TIMEATTACK_SCRIPT)
-			if await self._await_script(TIMEATTACK_SCRIPT):
-				await self._apply_mode_settings({'S_TimeLimit': PRACTICE_TIMELIMIT}, stage=False)
+			await self._hold_practice_timelimit(restart=True)
+			self._pin_practice_map()
 		else:
 			# Multi-map playlist: queue TimeAttack for the next map WITHOUT a RestartMap so
 			# the knockout's map-end advances to the next playlist map on its own (one map
 			# per night) and our queued script loads with it. A queued next-script alone does
 			# not switch the running mode on a plain rotation, so enforce the switch when the
-			# next map opens.
+			# next map opens (which also re-pins that map as the new night's practice map).
+			# Clear the old pin so a mid-rotation map_start does not snap back to last night.
+			self._practice_map_uid = None
 			await self.app.queue_timeattack()
 			self._force_ta_next_map = True
 		await self._arm_from_setting()
@@ -464,6 +523,8 @@ class BotnController:
 			total = 900
 		await self._run_countdown(total, fastest_txt)
 
+		# Practice may have drifted if the stock TA timer still fired; land KO on the pin.
+		await self._ensure_practice_map()
 		await self._switch_to_knockout(settings)
 		self.phase = 'knockout'
 		await self.instance.chat('$09f>>> $fffBowl of the Night$09f knockout is GO!')
@@ -548,16 +609,85 @@ class BotnController:
 
 	async def _load_practice_script(self):
 		"""Load TimeAttack for the practice phase with an open-ended time limit so the map
-		holds until the wall-clock cutoff. Mirrors the knockout handoff: capture the normal
-		limit first (to restore on stop), stage the override for the load, switch + restart,
-		then push it live once TimeAttack is up. The mode re-applies the time limit whenever
-		the value changes, so this second push is belt-and-braces against a staging miss."""
+		holds until the wall-clock cutoff.
+
+		Capture the normal limit first (to restore on stop), then load TA and push
+		``S_TimeLimit=0`` live. PyPlanet's ``update_next_settings`` only flushes on
+		``server_start`` (not ``RestartMap``), so staged writes are best-effort; live
+		``update_settings`` plus ``on_map_start`` re-application are the real hold.
+		Verify after a short settle and re-apply if the stock 300s default is still set."""
 		await self._capture_resting_timelimit()
+		await self._hold_practice_timelimit(restart=True)
+		await self._verify_practice_timelimit()
+
+	async def _hold_practice_timelimit(self, restart=False):
+		"""Push open-ended ``S_TimeLimit`` onto TimeAttack. When ``restart`` is True, also
+		queue TimeAttack and RestartMap (practice load / post-KO force / //botn end)."""
 		settings = {'S_TimeLimit': PRACTICE_TIMELIMIT}
+		# Best-effort staging for hosts that flush next-settings on server_start; live
+		# update below (and on_map_start) is what actually holds the map open.
 		await self._apply_mode_settings(settings, stage=True)
-		await self._load_script(TIMEATTACK_SCRIPT)
-		if await self._await_script(TIMEATTACK_SCRIPT):
+		if restart:
+			await self._load_script(TIMEATTACK_SCRIPT)
+			if await self._await_script(TIMEATTACK_SCRIPT):
+				await self._apply_mode_settings(settings, stage=False)
+		else:
 			await self._apply_mode_settings(settings, stage=False)
+
+	async def _verify_practice_timelimit(self):
+		"""Re-read ``S_TimeLimit`` after the practice load and re-apply if still positive."""
+		await asyncio.sleep(0.5)
+		try:
+			settings = await self.instance.mode_manager.get_settings()
+			raw = settings.get('S_TimeLimit')
+			value = int(raw) if raw is not None else 0
+		except Exception:
+			logger.exception('Knockout: BOTN could not verify practice S_TimeLimit')
+			return
+		if value > 0:
+			logger.warning(
+				'Knockout: BOTN practice S_TimeLimit still %s after load; re-applying 0', value)
+			await self._apply_mode_settings({'S_TimeLimit': PRACTICE_TIMELIMIT}, stage=False)
+
+	def _current_map_uid(self):
+		"""UID of the currently loaded map, or None if unknown."""
+		try:
+			current = self.instance.map_manager.current_map
+			return getattr(current, 'uid', None) or None
+		except Exception:
+			return None
+
+	def _pin_practice_map(self):
+		"""Remember the current map as tonight's BOTN practice map."""
+		uid = self._current_map_uid()
+		if uid:
+			self._practice_map_uid = uid
+			self._snap_back_uid = None
+
+	async def _jump_to_practice_map(self):
+		"""Jump the dedicated server back to the pinned practice map."""
+		uid = self._practice_map_uid
+		if not uid:
+			return
+		try:
+			await self.instance.map_manager.set_current_map(uid)
+		except Exception:
+			logger.exception('Knockout: BOTN failed to jump back to practice map %s', uid)
+			# Allow a later map_start to retry once the pin is still set.
+			self._snap_back_uid = None
+
+	async def _ensure_practice_map(self):
+		"""If practice drifted off the pin, jump back before KO handoff or stop."""
+		uid = self._practice_map_uid
+		if not uid:
+			return
+		current = self._current_map_uid()
+		if current and current != uid:
+			logger.info(
+				'Knockout: BOTN ensuring practice map %s (currently %s)', uid, current)
+			await self._jump_to_practice_map()
+			# Brief settle so JumpToMapIdent can land before a script switch.
+			await asyncio.sleep(0.5)
 
 	async def _capture_resting_timelimit(self):
 		"""Remember the server's normal TimeAttack ``S_TimeLimit`` the first time we override
@@ -577,11 +707,15 @@ class BotnController:
 			self._resting_timelimit = value
 
 	async def _restore_resting_timelimit(self):
-		"""Stage the server's normal TimeAttack time limit for the next load (the caller's
-		return-to-TimeAttack restart applies it), undoing the open-ended practice override."""
+		"""Restore the server's normal TimeAttack time limit (live + staged) so the resting
+		server cycles maps again after practice's open-ended override."""
 		if self._resting_timelimit is None:
 			return
-		await self._apply_mode_settings({'S_TimeLimit': self._resting_timelimit}, stage=True)
+		settings = {'S_TimeLimit': self._resting_timelimit}
+		# Stage for any upcoming server_start flush; also push live so RestartMap in
+		# return_to_timeattack does not leave S_TimeLimit=0 if staging never runs.
+		await self._apply_mode_settings(settings, stage=True)
+		await self._apply_mode_settings(settings, stage=False)
 		self._resting_timelimit = None
 
 	async def _switch_to_knockout(self, settings):

@@ -45,7 +45,7 @@ Admin commands use `//`. Public commands use `/` (listed at the end for referenc
 
 | Key | Name | Mode preset | Maps |
 |---|---|---|---|
-| `friday` | Friday Knockout Cup | `knockout_friday` (WU 3, shields on) | whole playlist |
+| `friday` | Friday Knockout Cup | `knockout_friday` (3× 2-min WU, shields on) | whole playlist |
 | `weekly` | Weekly Knockout Cup | `knockout_rotate` | 5 |
 | `quick` | Quick Knockout | `knockout_single` | 3 |
 
@@ -85,8 +85,9 @@ No admin command — driven by the mode when `S_EnableShields` is on (Friday pre
 | **Spend** | Only when that player would be eliminated (not DNF / give-up) |
 | **Effect** | Saves them only; does not knock the next player |
 | **HUD** | `✚` next to holders on the left match board |
+| **Warm-up** | Friday: **3 × 2 minutes** (`S_WarmUpNb=3`, `S_WarmUpDuration=120`) |
 
-Deploy **both** `apps/knockout/` and `Modes/Trackmania/Knockout.Script.txt` or mode behavior (shields, scoring callbacks) won’t match the app.
+Deploy **both** `apps/knockout/` and `Modes/Trackmania/Knockout.Script.txt` or mode behavior (warm-up clock, shields, scoring callbacks) won’t match the app.
 
 Shields need the mode’s `KO_WarmUp` (tracks warm-up finish times). An old script that only calls stock `MB_WarmUp` never awards shields.
 

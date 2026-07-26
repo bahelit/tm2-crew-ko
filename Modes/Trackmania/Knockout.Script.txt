@@ -18,7 +18,8 @@
 //     ---Label--- site, parent first then child). Match_LogVersions is plural
 //     (injected by ModeTrackmania); spawning is the ---Rounds_CanSpawn--- override
 //     (survivors = IsRacing); "wait for >=2 players" is the Rounds_WaitForPlayers
-//     hook; MB_WarmUp(S_WarmUpNb, -1) = S_WarmUpNb warm-up laps (round mode), 0 = none;
+//     hook; KO_WarmUp(S_WarmUpNb, limit) = S_WarmUpNb warm-up rounds (limit from
+//     S_WarmUpDuration: <0 round mode, >0 TA seconds); 0 rounds = none;
 //     matchmaking off via Match_Settings (MB_Settings_UseDefaultMatchmaking=False).
 //   * XmlRpc:: in this chain binds to Libs/Nadeo/XmlRpc2 (RegisterCallback /
 //     UnregisterCallback / PassOn exist there, but NOT SendCallbackArray /
@@ -72,7 +73,8 @@
 #Setting S_RoundsPerMap			0		as _("Number of rounds per map (0 = infinite):")
 #Setting S_DoubleKnockUntil		20		as _("DoubleKO - knock 2 players until (0 = disabled):")
 #Setting S_PracticeRounds		0		as _("Practice rounds before eliminations start (0 = disabled):")
-#Setting S_WarmUpNb				0		as _("Warm-up laps before the knockout begins (0 = none):")
+#Setting S_WarmUpNb				0		as _("Warm-up rounds before the knockout begins (0 = none):")
+#Setting S_WarmUpDuration		-1		as _("Warm-up duration in seconds (-1 = full-map rounds, >0 = TA time limit):")
 #Setting S_FinishCountdown		30		as _("Seconds to finish after the first player (DNFs the rest):")
 #Setting S_EnableShields		False	as _("Earned shields: warm-up fastest banks a one-time save:")
 #Setting S_DebugBotsCount		0		as _("Number of fake players (debug only):")
@@ -304,10 +306,13 @@ if (GetRacingPlayersAmount() <= 1) UIManager.UIAll.BigMessage = _("New match");
 if (!ServerShutdownRequested && !MatchEndRequested) MB_Sleep(3000);
 UIManager.UIAll.BigMessage = "";
 
-// Warm-up before the knockout begins. Round mode (-1 time limit) so each warm-up
-// round runs the full map -- one lap on a normal map -- making S_WarmUpNb a count of
-// warm-up laps. 0 skips it (e.g. a BOTN whose TimeAttack practice already served as
-// the warm-up). The PyPlanet app sets S_WarmUpNb per event (BOTN / cup).
+// Warm-up before the knockout begins.
+// S_WarmUpNb = number of warm-up rounds (0 skips; e.g. BOTN TA practice already served).
+// S_WarmUpDuration (seconds) selects the time-limit mode for each round:
+//   < 0  → round mode (-1 ms): full-map laps, no clock (BOTN default)
+//   == 0 → TA with auto limit from author time
+//   > 0  → TA with that many seconds (cup Friday uses 120 = 2 minutes per round)
+// The PyPlanet app sets S_WarmUpNb / S_WarmUpDuration per event (BOTN / cup presets).
 //
 // Use KO_WarmUp (not stock MB_WarmUp): the base warm-up loop only Valid()s events and
 // never copies finish times into Score.BestRace, so AwardWarmUpShield found nobody.
@@ -319,7 +324,13 @@ UIManager.UIAll.BigMessage = "";
 // running mode. That brief pause guarantees the freshly-pushed count is in place before
 // warm-up reads it -- reading it at the very top raced the push and could give zero
 // warm-up laps. See apps/knockout/botn.py (_switch_to_knockout).
-KO_WarmUp(S_WarmUpNb, -1);
+declare Integer WarmUpTimeLimit = -1;
+if (S_WarmUpDuration > 0) {
+	WarmUpTimeLimit = S_WarmUpDuration * 1000;
+} else if (S_WarmUpDuration == 0) {
+	WarmUpTimeLimit = 0;
+}
+KO_WarmUp(S_WarmUpNb, WarmUpTimeLimit);
 UpdatePlayerColors();
 ***
 

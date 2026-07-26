@@ -48,6 +48,7 @@ def test_resolve_mode_preset_from_cup_key():
 	key, preset = pc.resolve_mode_preset('friday')
 	assert key == 'knockout_friday'
 	assert preset['settings']['S_WarmUpNb'] == 3
+	assert preset['settings']['S_WarmUpDuration'] == 120
 
 
 def test_resolve_mode_preset_from_preset_id():

@@ -28,6 +28,7 @@
 			"settings": {
 				"S_RoundsPerMap": 0,
 				"S_WarmUpNb": 3,
+				"S_WarmUpDuration": 120,
 				"S_FinishCountdown": 30,
 				"S_DoubleKnockUntil": 20,
 				"S_ForceLapsNb": 0,

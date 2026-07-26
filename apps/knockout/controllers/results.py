@@ -101,14 +101,30 @@ class ResultsController:
 		directory = await self.app.setting_cup_export_path.get_value()
 		return export_mod.write_exports(cup, standings, directory or '')
 
-	async def announce_top(self, cup, count=3):
-		"""Send the top finishers of a completed cup to chat."""
+	async def show_all(self, cup):
+		"""Open cup standings for every online player (cup end ceremony)."""
+		if cup is None:
+			return
 		standings = await self.compute_standings(cup)
 		if not standings:
 			return
-		medals = ['$ff0 1.', '$bbb 2.', '$d80 3.']
-		for index, row in enumerate(standings[:count]):
-			label = medals[index] if index < len(medals) else '   {}.'.format(index + 1)
-			await self.instance.chat(
-				'{} $fff{}$z $bbb- {} pts'.format(label, row['nickname'], row['cup_points'])
-			)
+		view = CupResultsView(self.app, cup, standings)
+		try:
+			online = list(self.instance.player_manager.online)
+		except Exception:
+			logger.exception('Knockout: could not list online players for cup results')
+			return
+		for entry in online:
+			try:
+				await view.display(player=entry)
+			except Exception:
+				logger.exception(
+					'Knockout: failed to show cup results to %s',
+					getattr(entry, 'login', '?'),
+				)
+
+	async def announce_top(self, cup, count=3):
+		"""Announce the cup winner and podium in public chat (after cup complete)."""
+		standings = await self.compute_standings(cup)
+		for line in export_mod.format_completion_messages(standings, count=count):
+			await self.instance.chat(line)

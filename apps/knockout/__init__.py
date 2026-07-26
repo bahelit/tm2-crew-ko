@@ -608,8 +608,13 @@ class KnockoutConfig(AppConfig):
 
 	async def on_cup_complete(self, cup):
 		"""Called by the cup controller when a cup reaches its map count (e.g. a Friday
-		knockout cup that has run through the whole playlist)."""
+		knockout cup that has run through the whole playlist), and by ``//cup end``.
+
+		Announces the winner in chat and opens standings for everyone online so admins
+		do not need to remember ``/cup results``.
+		"""
 		await self.results.announce_top(cup)
+		await self.results.show_all(cup)
 		await self.hide_widget()
 		# The cup just completed on its final knockout map; drop back to TimeAttack for
 		# the next map so the server doesn't keep cycling knockout after the cup is done.

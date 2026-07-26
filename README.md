@@ -42,7 +42,7 @@ That one command stops any running BOTN, loads the Knockout mode with the Friday
 
 **Deploy both the app and the mode script.** Cup points and auto-complete only fire when Knockout finishes a map and emits `KOMatchStandings`. That requires the repo’s `Modes/Trackmania/Knockout.Script.txt` on the dedicated server (not only `apps/knockout/`). An old mode script can loop rounds forever so maps never score.
 
-The cup auto-completes after every map in the playlist has been **recorded** (chat: `Cup … — map X / Y recorded`), announces the top 3, and returns to TimeAttack. Points on the left HUD update after each recorded map — not mid-race.
+The cup auto-completes after every map in the playlist has been **recorded** (chat: `Cup … — map X / Y recorded`), announces the **winner** and top 3 in chat, opens standings for everyone online, and returns to TimeAttack. Points on the left HUD update after each recorded map — not mid-race.
 
 | Map count | Behaviour |
 |---|---|
@@ -92,7 +92,7 @@ KNOCKOUT_STARTUP_MODE = 'botn'   # 'knockout' | 'botn' | 'none'
 |---|---|
 | `//cup on [key] [name]` | Start a cup; `friday` / `weekly` / `quick` apply the linked mode + map count |
 | `//cup off` | Stop the cup; return to TimeAttack |
-| `//cup end` | End the cup now (announce top 3, same as auto-complete); forces the server back to TimeAttack |
+| `//cup end` | End the cup now (announce winner + open standings, same as auto-complete); forces TimeAttack |
 | `//cup setup <preset>` | Load a mode preset now (`knockout_friday`, or a cup key like `friday`) |
 | `//cup mapcount <n\|all>` | Set map count (`all` = playlist, `0` = open-ended) |
 | `//cup edition <n>` | Set edition number |
@@ -112,7 +112,7 @@ KNOCKOUT_STARTUP_MODE = 'botn'   # 'knockout' | 'botn' | 'none'
 | Command | Description |
 |---|---|
 | `/cup status` | Active cup progress |
-| `/cup results` | Standings (works after cup ends) |
+| `/cup results` | Standings (auto-opens on cup end; still works afterward) |
 | `/cup matches` | Maps played |
 | `/cup season [key]` | Season leaderboard |
 | `/cup stats <login>` | Player cup history |

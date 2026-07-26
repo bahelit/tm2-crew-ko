@@ -24,6 +24,7 @@ def _load(name, filename):
 
 season = _load('ko_season', 'season.py')
 markers = _load('ko_markers', 'markers.py')
+export = _load('ko_export', 'export.py')
 
 
 def _standing(login, cup_points, ko_points=0, maps=1, nickname=None):
@@ -106,6 +107,37 @@ def test_accumulate_player_absent():
 	assert rows == []
 	assert summary['cups'] == 0
 	assert summary['avg_place'] == 0
+
+
+# ------------------------------------------------------- cup end announcement
+
+def test_format_completion_messages_winner_and_podium():
+	standings = [
+		_standing('alice', 30, nickname='$fffAlice'),
+		_standing('bob', 20, nickname='Bob'),
+		_standing('cara', 10, nickname='Cara'),
+		_standing('dan', 5, nickname='Dan'),
+	]
+	lines = export.format_completion_messages(standings, count=3)
+	assert any('Winner:' in line and 'Alice' in line and '30' in line for line in lines)
+	# Three podium lines (1–3 only; Dan is 4th and omitted) + winner + /cup results hint.
+	podium = [line for line in lines if ' pts' in line and ('1.' in line or '2.' in line or '3.' in line)]
+	assert len(podium) == 3
+	assert not any('Dan' in line for line in lines)
+	assert any('/cup results' in line for line in lines)
+
+
+def test_format_completion_messages_empty_standings():
+	lines = export.format_completion_messages([])
+	assert len(lines) == 1
+	assert 'no map results' in lines[0].lower()
+
+
+def test_format_completion_messages_single_player():
+	lines = export.format_completion_messages([_standing('solo', 7, nickname='Solo')])
+	assert any('Winner:' in line and 'Solo' in line and '7' in line for line in lines)
+	assert any('1.' in line and 'Solo' in line for line in lines)
+	assert any('/cup results' in line for line in lines)
 
 
 # --------------------------------------------------------------- VOD markers

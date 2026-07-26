@@ -41,6 +41,45 @@ def build_discord(cup, standings):
 	return '\n'.join(lines)
 
 
+def format_completion_messages(standings, count=3):
+	"""
+	Build public chat lines for a finished cup (winner + podium).
+
+	Pure helper so unit tests can cover wording without PyPlanet. The cup
+	controller already emits the ``Cup … complete!`` line before these.
+
+	Returns a list of ManiaPlanet-coloured chat strings. Empty standings yield a
+	single explicit "no results" line so end never goes silent.
+	"""
+	if not standings:
+		return [
+			'$f00>>> Cup complete but no map results were recorded.',
+		]
+
+	lines = []
+	winner = standings[0]
+	lines.append(
+		'$0f0>>> $fffWinner: {}$z $0f0— $fff{}$0f0 pts'.format(
+			winner.get('nickname') or winner.get('login') or '?',
+			winner.get('cup_points', 0),
+		)
+	)
+
+	medals = ['$ff0 1.', '$bbb 2.', '$d80 3.']
+	for index, row in enumerate(standings[: max(0, int(count))]):
+		label = medals[index] if index < len(medals) else '   {}.'.format(index + 1)
+		lines.append(
+			'{} $fff{}$z $bbb- {} pts'.format(
+				label,
+				row.get('nickname') or row.get('login') or '?',
+				row.get('cup_points', 0),
+			)
+		)
+
+	lines.append('$bbb>>> Full standings: $fff/cup results')
+	return lines
+
+
 def _filename(cup, extension):
 	safe_key = re.sub(r'[^0-9A-Za-z_-]+', '_', cup.cup_key or 'cup')
 	return 'knockout_cup_{}_e{}.{}'.format(safe_key, cup.edition, extension)

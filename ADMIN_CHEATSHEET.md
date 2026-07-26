@@ -27,7 +27,7 @@ Admin commands use `//`. Public commands use `/` (listed at the end for referenc
 |---|---|
 | `//cup on [key] [name…]` | Start a cup. Keys: `friday`, `weekly`, `quick` (or a custom key from presets). Optional display name after the key. |
 | `//cup off` | Stop the cup; return to TimeAttack. |
-| `//cup end` | End **now** (announce top, same as auto-complete). Best-effort records the current map first, then forces TimeAttack. |
+| `//cup end` | End **now** (announce winner + open standings for everyone, same as auto-complete). Best-effort records the current map first, then forces TimeAttack. |
 | `//cup setup <preset>` | Apply mode + settings only (`friday` / `knockout_friday`, etc.). Does **not** start cup scoring. |
 
 ### During a cup
@@ -109,7 +109,7 @@ Shields need the mode’s `KO_WarmUp` (tracks warm-up finish times). An old scri
 | Command | What it does |
 |---|---|
 | `/cup status` | Active cup progress |
-| `/cup results` | Standings (works after cup ends) |
+| `/cup results` | Standings (auto-opens for everyone on cup end; still works afterward) |
 | `/cup matches` | Maps played |
 | `/cup season [key]` | Season leaderboard |
 | `/cup stats <login>` | Player cup history |

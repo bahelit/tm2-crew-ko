@@ -5,7 +5,7 @@ from pyplanet.apps.core.trackmania import callbacks as tm_signals
 
 from ..models import MatchInfo
 from ..callbacks import parse_round_order, parse_round_start, first_login, register
-from ..hud_format import format_race_time, format_gap, split_cp_label
+from ..hud_format import format_race_time, format_gap, split_cp_label, waypoint_cp_count
 
 logger = logging.getLogger(__name__)
 
@@ -242,9 +242,11 @@ class LiveController:
 
 	# --------------------------------------------------- best-lap / roster
 
-	async def on_finish(self, player=None, race_time=None, **kwargs):
+	async def on_finish(self, player=None, race_time=None, race_cps=None, is_end_race=False, **kwargs):
 		"""Track each player's best lap this map so the HUD can show times during
-		warm-up (and as a fallback before KORoundOrder carries them)."""
+		warm-up (and as a fallback before KORoundOrder carries them). Finish events
+		also feed the splits panel (PyPlanet does not emit waypoint on the finish
+		line — only the custom finish signal carries race_cps there)."""
 		login = getattr(player, 'login', None) or (str(player) if player else '')
 		if not login:
 			return
@@ -267,11 +269,37 @@ class LiveController:
 			self._countdown_armed = True
 			await self._show_countdown()
 
-	async def on_waypoint(self, player=None, race_time=None, race_cps=None, is_end_race=False, **kwargs):
+		# Finish line split (waypoint is not fired on finish).
+		if self.round > 0 and self.phase in ('racing', 'showdown'):
+			count = waypoint_cp_count(race_cps=race_cps, **kwargs)
+			if count <= 0:
+				# Still show a FIN row even when CP list is empty.
+				count = max(self.cp_best.keys(), default=0) + 1
+			prev_best = self.cp_best.get(count)
+			if prev_best is None or ms <= prev_best:
+				self.cp_best[count] = ms
+				split_text = format_race_time(ms)
+			else:
+				split_text = format_gap(ms - prev_best)
+			name = await self._player_name(login)
+			self.cp_feed.insert(0, dict(
+				name=name,
+				cp=split_cp_label(count, True),
+				split=split_text,
+				color='66FF66',
+			))
+			del self.cp_feed[CP_FEED_MAX:]
+			await self._refresh_splits()
+
+	async def on_waypoint(self, player=None, race_time=None, race_cps=None, is_end_race=False, raw=None, **kwargs):
 		"""Feed the bottom splits panel. On each checkpoint crossing during a live
 		scored round, record the player's split versus the best time seen at that
 		checkpoint so far: the leading split shows as an absolute time, the rest as a
-		``+gap``. Only live rounds count, so warm-up driving never clutters the feed."""
+		``+gap``. Only live rounds count, so warm-up driving never clutters the feed.
+
+		PyPlanet intermediate waypoints do not pass ``race_cps`` (only finish does
+		via the separate finish signal). Ordinal comes from ``waypoint_cp_count``.
+		"""
 		if not (self.round > 0 and self.phase in ('racing', 'showdown')):
 			return
 		login = getattr(player, 'login', None) or (str(player) if player else '')
@@ -283,11 +311,7 @@ class LiveController:
 			return
 		if ms < 0:
 			return
-		# Checkpoint ordinal: how many checkpoints have been crossed this lap so far.
-		try:
-			count = len(race_cps) if race_cps else 0
-		except TypeError:
-			count = 0
+		count = waypoint_cp_count(race_cps=race_cps, raw=raw, **kwargs)
 		if count <= 0:
 			return
 		prev_best = self.cp_best.get(count)
@@ -394,6 +418,17 @@ class LiveController:
 		self._countdown_armed = False
 		self.cp_best = {}
 		self.cp_feed = []
+		# Self-heal when the plugin missed KOPlayerAdded (reload mid-map, callback
+		# glitch, etc.): a real scored round means we are live. Without this, phase
+		# stays 'idle', the stream ticker shows "N ON SERVER" practice chrome under
+		# the Round banner, and the splits feed stays gated off.
+		if self.round > 0 and self.phase in ('idle', 'ended'):
+			if not self.racing:
+				if self.order:
+					self.racing = [entry['login'] for entry in self.order if entry.get('login')]
+				else:
+					self.racing = await self.roster_logins()
+			self.phase = 'showdown' if self.count == 2 else 'racing'
 		await self._hide_countdown()
 		await self._refresh_overlays()
 

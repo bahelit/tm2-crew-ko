@@ -137,6 +137,38 @@ def test_format_hud_name_shield_marker():
 	assert hud.format_hud_name(None, has_shield=False) == ''
 
 
+# --------------------------------------------------------- waypoint CP count
+
+def test_waypoint_cp_count_from_race_cps_list():
+	assert hud.waypoint_cp_count(race_cps=[100, 200, 300]) == 3
+	assert hud.waypoint_cp_count(race_cps=[]) == 0
+	assert hud.waypoint_cp_count(race_cps=None) == 0
+
+
+def test_waypoint_cp_count_from_raw_checkpointinrace():
+	# PyPlanet intermediate waypoints only pass raw — no race_cps.
+	assert hud.waypoint_cp_count(raw={'checkpointinrace': 2, 'racetime': 12000}) == 2
+	assert hud.waypoint_cp_count(raw={'CheckpointInRace': 4}) == 4
+
+
+def test_waypoint_cp_count_from_raw_checkpoint_list():
+	assert hud.waypoint_cp_count(raw={'curracecheckpoints': [1, 2, 3, 4]}) == 4
+	assert hud.waypoint_cp_count(raw={'curlapcheckpoints': [10, 20]}) == 2
+
+
+def test_waypoint_cp_count_prefers_explicit_list_over_raw():
+	assert hud.waypoint_cp_count(
+		race_cps=[1, 2],
+		raw={'checkpointinrace': 9},
+	) == 2
+
+
+def test_waypoint_cp_count_empty_when_unknown():
+	assert hud.waypoint_cp_count() == 0
+	assert hud.waypoint_cp_count(raw={}) == 0
+	assert hud.waypoint_cp_count(raw={'checkpointinrace': 0}) == 0
+
+
 if __name__ == '__main__':
 	import sys
 	import traceback

@@ -67,6 +67,45 @@ def split_cp_label(cp_count, is_end_race):
 	return 'CP {}'.format(n)
 
 
+def waypoint_cp_count(race_cps=None, raw=None, **_kwargs):
+	"""Checkpoint ordinal for the splits feed from a PyPlanet waypoint event.
+
+	Intermediate ``trackmania:waypoint`` callbacks only expose ``player``,
+	``race_time``, ``flow``, and ``raw`` — not ``race_cps``. Finish events carry
+	``race_cps`` / ``cps`` on the custom ``finish`` signal instead. Prefer an
+	explicit list length, then ManiaPlanet raw fields (``checkpointinrace`` or
+	the length of ``curracecheckpoints``). Returns 0 when unknown.
+	"""
+	for candidate in (race_cps, _kwargs.get('cps'), _kwargs.get('lap_cps')):
+		try:
+			if candidate is not None:
+				n = len(candidate)
+				if n > 0:
+					return n
+		except TypeError:
+			pass
+
+	if isinstance(raw, dict):
+		for key in ('checkpointinrace', 'checkpointinlap', 'CheckpointInRace', 'CheckpointInLap'):
+			if key in raw and raw[key] is not None:
+				try:
+					n = int(raw[key])
+				except (TypeError, ValueError):
+					n = 0
+				if n > 0:
+					return n
+		for key in ('curracecheckpoints', 'curlapcheckpoints', 'CurRaceCheckpoints', 'CurLapCheckpoints'):
+			try:
+				seq = raw.get(key)
+				if seq is not None:
+					n = len(seq)
+					if n > 0:
+						return n
+			except TypeError:
+				pass
+	return 0
+
+
 def row_color(danger, finished):
 	"""Text colour for a HUD row: red on the elimination bubble, green once the
 	player has safely finished, white otherwise."""

@@ -9,8 +9,8 @@ ROW_H = 4
 
 class SplitsHud(TemplateView):
 	"""
-	Bottom centre-right rolling feed of recent checkpoint crossings, shown only
-	during a live Knockout round (next to the in-game timer). Each crossing lists
+	Bottom middle-right rolling feed of recent checkpoint crossings, shown only
+	during a live Knockout round (near the in-game timer). Each crossing lists
 	the player, the checkpoint they hit, and their split versus the best time seen
 	at that checkpoint so far -- the leading split shows as an absolute time, the
 	rest as a ``+gap``. Newest crossing on top; the LiveController builds the feed

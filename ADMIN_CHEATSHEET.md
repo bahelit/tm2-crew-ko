@@ -88,6 +88,8 @@ No admin command — driven by the mode when `S_EnableShields` is on (Friday pre
 
 Deploy **both** `apps/knockout/` and `Modes/Trackmania/Knockout.Script.txt` or mode behavior (shields, scoring callbacks) won’t match the app.
 
+Shields need the mode’s `KO_WarmUp` (tracks warm-up finish times). An old script that only calls stock `MB_WarmUp` never awards shields.
+
 ---
 
 ## Troubleshooting

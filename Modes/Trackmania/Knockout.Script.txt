@@ -128,6 +128,8 @@ declare Integer G_RoundsPlayed;		///< Rounds completed this match (used for prac
 declare Boolean G_NewMatch;			///< Set at Match_StartMatch; triggers a fresh roster seed next round
 declare Text G_PrevRoundOrderSig;	///< Last KORoundOrder signature sent (throttle duplicates)
 declare Boolean G_FirstFinisherSeen;	///< Whether the round's first finisher was handled
+declare Integer[Text] G_WarmUpBestTimes;	///< login -> best warm-up race time (ms) for shields
+declare Integer G_ClearBigMessageAt;	///< Now-ms when Round BigMessage should clear (0 = off)
 // Xml load
 declare Ident	G_UI_RequestId;			///< Id of the request to the xml file
 declare Integer	G_UI_RequestEndTime;	///< Timeout for the request
@@ -293,6 +295,8 @@ UpdatePlayerColors();
 // AFTER players + bots have actually joined (the fake users requested above are
 // not yet in Players here).
 G_NewMatch = True;
+G_ClearBigMessageAt = 0;
+G_WarmUpBestTimes.clear();
 
 // ---------------------------------- //
 // Announce a fresh match when the racing set is empty.
@@ -305,12 +309,17 @@ UIManager.UIAll.BigMessage = "";
 // warm-up laps. 0 skips it (e.g. a BOTN whose TimeAttack practice already served as
 // the warm-up). The PyPlanet app sets S_WarmUpNb per event (BOTN / cup).
 //
+// Use KO_WarmUp (not stock MB_WarmUp): the base warm-up loop only Valid()s events and
+// never copies finish times into Score.BestRace, so AwardWarmUpShield found nobody.
+// KO_WarmUp tracks G_WarmUpBestTimes for the shield earn path while keeping WarmUp::
+// start/end so clients still get the stock warm-up UI.
+//
 // Read AFTER the "New match" settle above (not at the top of StartMap): on the BOTN
 // handoff the controller switches into this script and then pushes S_WarmUpNb onto the
 // running mode. That brief pause guarantees the freshly-pushed count is in place before
-// MB_WarmUp reads it -- reading it at the very top raced the push and could give zero
+// warm-up reads it -- reading it at the very top raced the push and could give zero
 // warm-up laps. See apps/knockout/botn.py (_switch_to_knockout).
-MB_WarmUp(S_WarmUpNb, -1);
+KO_WarmUp(S_WarmUpNb, -1);
 UpdatePlayerColors();
 ***
 
@@ -398,12 +407,13 @@ if (!Map.TMObjective_IsLapRace) NbLaps = 1;
 else if (S_ForceLapsNb > 0) NbLaps = S_ForceLapsNb;
 else NbLaps = 1000;
 
-// Round message
+// Round message (cleared a few seconds into Match_PlayLoop via G_ClearBigMessageAt).
 declare TotalRoundsNb = S_RoundsPerMap;
 if (Map.TMObjective_IsLapRace || S_RoundsPerMap <= 0) TotalRoundsNb = 1;
 declare RoundsMessage = MB_GetRoundCount()^" / "^TotalRoundsNb;
 if (S_RoundsPerMap <= 0 || Map.TMObjective_IsLapRace) RoundsMessage = TL::ToText(MB_GetRoundCount());
 UIManager.UIAll.BigMessage = TL::Compose(_("Round %1"), RoundsMessage);
+G_ClearBigMessageAt = Now + 3000;
 
 // Tell overlays which round just started (TotalRounds 0 = unbounded).
 XmlRpc_KORoundStart(MB_GetRoundCount(), S_RoundsPerMap);
@@ -424,6 +434,12 @@ declare Integer RoundGiveUpsAmount for This;
 declare Integer[] LapPlayersNbDoubled for This;
 declare Integer PrevMostLapsNb for This;
 declare Integer PrevPlayersCount for This;
+
+// Drop the center "Round N" banner a few seconds after round start.
+if (G_ClearBigMessageAt > 0 && Now >= G_ClearBigMessageAt) {
+	UIManager.UIAll.BigMessage = "";
+	G_ClearBigMessageAt = 0;
+}
 
 declare Boolean SawWayPoint;
 SawWayPoint = False;
@@ -850,24 +866,109 @@ Void XmlRpc_KOShieldUsed(CTmPlayer _Player) {
 // Knockout
 // ---------------------------------- //
 
+/** Warm-up that records best finish times for shield awards.
+    Stock MB_WarmUp only Valid()s events and never stores BestRace, so the
+    warm-up-fastest shield path always saw an empty field. This mirrors the base
+    warm-up UI (WarmUp::Start/StartRound/End) while filling G_WarmUpBestTimes. */
+Void KO_WarmUp(Integer _NbOfWarmUp, Integer _TimeLimit) {
+	if (_NbOfWarmUp <= 0) return;
+
+	declare TimeLimit = _TimeLimit;
+	if (TimeLimit == 0) {
+		declare ObjectiveNbLaps = Map.TMObjective_NbLaps;
+		if (ObjectiveNbLaps <= 0 || !Map.TMObjective_IsLapRace) ObjectiveNbLaps = 1;
+		declare MaxTime = Map.TMObjective_AuthorTime / ObjectiveNbLaps;
+		TimeLimit = 5000 + MaxTime + (MaxTime / 6);
+	}
+
+	declare PrevUISequence = UIManager.UIAll.UISequence;
+	G_WarmUpBestTimes.clear();
+
+	WarmUp::Start();
+	declare WarmUpPlayedNb = 0;
+	while (!WarmUp::Finished() && WarmUpPlayedNb < _NbOfWarmUp && !ServerShutdownRequested && !MatchEndRequested) {
+		WarmUp::StartRound(WarmUpPlayedNb + 1, _NbOfWarmUp, TimeLimit);
+		while (!WarmUp::Finished() && !WarmUp::RoundFinished() && !ServerShutdownRequested && !MatchEndRequested) {
+			MB_Yield();
+
+			foreach (Event in PendingEvents) {
+				declare Processed = Events::Valid(Event);
+				// Record finish times only — WarmUp owns race lifecycle.
+				if (Event.Type == CTmModeEvent::EType::WayPoint && Event.IsEndRace) {
+					if (Event.Player != Null && Event.Player.User != Null && Event.Player.CurRace != Null) {
+						declare Integer T = Event.Player.CurRace.Time;
+						if (T > 0) {
+							declare Text Login = Event.Player.User.Login;
+							if (!G_WarmUpBestTimes.existskey(Login) || T < G_WarmUpBestTimes[Login]) {
+								G_WarmUpBestTimes[Login] = T;
+							}
+							// Also keep BestRace when possible (harmless for later fallback).
+							if (Event.Player.Score != Null) {
+								if (Event.Player.Score.BestRace == Null
+										|| Event.Player.Score.BestRace.Compare(Event.Player.CurRace, CTmResult::ETmRaceResultCriteria::Time) <= 0) {
+									Event.Player.Score.BestRace = Event.Player.CurRace;
+								}
+							}
+						}
+					}
+				}
+			}
+
+			WarmUp::Yield();
+		}
+		WarmUp::EndRound();
+		WarmUpPlayedNb += 1;
+		MB_Yield();
+	}
+	WarmUp::End();
+
+	UIManager.UIAll.UISequence = CUIConfig::EUISequence::EndRound;
+	UIManager.UIAll.BigMessage = _("End of warmup, match starting...");
+	CutOffTimeLimit = Now + 4000;
+	while (Now < CutOffTimeLimit && !ServerShutdownRequested && !MatchEndRequested) {
+		MB_Yield();
+	}
+	CutOffTimeLimit = -1;
+	UIManager.UIAll.BigMessage = "";
+	UIManager.UIAll.UISequence = PrevUISequence;
+}
+
 /** Give the player with the fastest warm-up race a one-time shield (if enabled).
-    Must be defined before StartKnockout (ManiaScript resolves callees top-down). */
+    Must be defined before StartKnockout (ManiaScript resolves callees top-down).
+    Prefers G_WarmUpBestTimes filled by KO_WarmUp; falls back to Score.BestRace. */
 Void AwardWarmUpShield() {
 	if (!S_EnableShields) return;
 	declare CTmPlayer BestPlayer;
 	BestPlayer = Null;
 	declare Integer BestTime;
 	BestTime = -1;
+
+	// Primary: times tracked during KO_WarmUp (look up by login on the player list).
 	foreach (Player in Players) {
-		if (Player.Score == Null || Player.Score.BestRace == Null) continue;
-		declare Integer T = Player.Score.BestRace.Time;
+		if (Player.User == Null) continue;
+		declare Text Login = Player.User.Login;
+		if (!G_WarmUpBestTimes.existskey(Login)) continue;
+		declare Integer T = G_WarmUpBestTimes[Login];
 		if (T <= 0) continue;
-		// First-found wins ties (stable Players order).
 		if (BestTime < 0 || T < BestTime) {
 			BestTime = T;
 			BestPlayer = Player;
 		}
 	}
+
+	// Fallback: Score.BestRace if something else populated it.
+	if (BestPlayer == Null) {
+		foreach (Player in Players) {
+			if (Player.Score == Null || Player.Score.BestRace == Null) continue;
+			declare Integer T = Player.Score.BestRace.Time;
+			if (T <= 0) continue;
+			if (BestTime < 0 || T < BestTime) {
+				BestTime = T;
+				BestPlayer = Player;
+			}
+		}
+	}
+
 	if (BestPlayer != Null) {
 		declare Integer ShieldTokens for BestPlayer;
 		if (ShieldTokens < 1) {
@@ -897,9 +998,9 @@ Void StartKnockout() {
 		}
 		XmlRpc_KOPlayerAdded(Player);
 	}
-	// After warm-up (MB_WarmUp runs before WaitForPlayers → StartKnockout), the
-	// fastest warm-up finish on Score.BestRace earns a one-time save. Tokens were
-	// zeroed above so this is the primary earn path for Friday cups.
+	// After warm-up (KO_WarmUp runs before WaitForPlayers → StartKnockout), the
+	// fastest warm-up finish in G_WarmUpBestTimes earns a one-time save. Tokens
+	// were zeroed above so this is the primary earn path for Friday cups.
 	AwardWarmUpShield();
 }
 

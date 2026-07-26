@@ -4,8 +4,10 @@ from pyplanet.views.template import TemplateView
 class CupTicker(TemplateView):
 	"""
 	Stream ticker: players remaining, elimination bubble (red), and final-two
-	showdown names. Shown to pure spectators and /ko stream opt-ins by default,
-	or to everyone when show_overlays is on. Driven by LiveController.
+	showdown names during live KO rounds. Shown to pure spectators and /ko stream
+	opt-ins by default, or to everyone when show_overlays is on. Warm-up no longer
+	shows a center "PRACTICE / N ON SERVER" card (left match HUD has the roster).
+	Driven by LiveController.
 	"""
 
 	template_name = 'knockout/ticker.xml'
@@ -38,10 +40,9 @@ class CupTicker(TemplateView):
 	async def refresh(self, live):
 		"""Pull the current picture from the LiveController and (re)display.
 
-		Live KO rounds show the racing count + danger bubble. During cup/BOTN
-		warm-up (phase idle while a Knockout event is active) we still push a
-		practice ticker so the dedicated spectator is not blank for friday's
-		multi-lap warm-ups.
+		Live KO rounds show the racing count + danger bubble for the stream box.
+		Warm-up / between-maps no longer push a center "PRACTICE / N ON SERVER"
+		card — that duplicated the left match HUD and sat under the Round banner.
 		"""
 		self.showdown = live.phase == 'showdown'
 		danger = set(live.danger_logins()) if live.phase not in ('idle', 'ended') else set()
@@ -55,27 +56,6 @@ class CupTicker(TemplateView):
 				self.racing_names = [await self._name(login) for login in live.racing]
 			else:
 				self.racing_names = []
-			await self.app.push_stream_view(self, visible=True)
-			return
-
-		# Warm-up / practice stream presence during an active cup or BOTN.
-		event_active = bool(getattr(live, 'cup_active', False))
-		botn = getattr(self.app, 'botn', None)
-		if botn is not None and getattr(botn, 'active', False):
-			event_active = True
-		is_knockout = bool(getattr(live, 'is_knockout', False))
-		if event_active and is_knockout and live.phase in ('idle', 'ended'):
-			try:
-				logins = await live.roster_logins()
-			except Exception:
-				logins = []
-			self.count = len(logins)
-			self.showdown = False
-			self.danger_names = []
-			# Sentinel consumed by the template: empty danger + showdown false +
-			# practice_label in context (see get_context_data).
-			self.racing_names = []
-			self._practice = True
 			await self.app.push_stream_view(self, visible=True)
 			return
 

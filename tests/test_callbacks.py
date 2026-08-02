@@ -136,6 +136,28 @@ def test_first_login_empty():
 	assert cb.first_login(None) == ''
 
 
+# --------------------------------------------------------------- callback_login
+
+def test_callback_login_reads_source():
+	# The real shape: a Callback with no target gets signal= and source= only.
+	assert cb.callback_login(dict(signal=object(), source=['alice'])) == 'alice'
+
+
+def test_callback_login_reads_bare_source_string():
+	assert cb.callback_login(dict(signal=object(), source='alice')) == 'alice'
+
+
+def test_callback_login_missing_payload_is_empty_not_none():
+	# Reading a kwarg that is not there used to yield the string 'None', which
+	# matched no player and quietly poisoned shield/winner tracking.
+	assert cb.callback_login(dict(signal=object())) == ''
+
+
+def test_callback_login_still_accepts_parsed_kwargs():
+	assert cb.callback_login(dict(player_login='bob')) == 'bob'
+	assert cb.callback_login(dict(login='cara')) == 'cara'
+
+
 # --------------------------------------------------------------- contract shape
 
 def test_all_callbacks_is_the_full_contract():
@@ -143,6 +165,65 @@ def test_all_callbacks_is_the_full_contract():
 		'KOPlayerAdded', 'KOPlayerRemoved', 'KOSendWinner', 'KOMatchStandings',
 		'KORoundOrder', 'KORoundStart', 'KOShieldAwarded', 'KOShieldUsed',
 	}
+
+
+# ------------------------------------------------------------------ dispatch key
+
+def _fake_callback_class(recorder):
+	"""Stand-in for pyplanet.core.events.Callback that records its arguments."""
+	class FakeCallback:
+		def __init__(self, call, namespace, code, target=None):
+			recorder.append(dict(call=call, namespace=namespace, code=code, target=target))
+	return FakeCallback
+
+
+def _make_callback(code, target=None):
+	"""Call cb.make_callback with a stubbed pyplanet.core.events module."""
+	import sys
+	import types
+
+	recorder = []
+	core = types.ModuleType('pyplanet.core')
+	events = types.ModuleType('pyplanet.core.events')
+	events.Callback = _fake_callback_class(recorder)
+	root = types.ModuleType('pyplanet')
+	saved = {name: sys.modules.get(name) for name in
+		('pyplanet', 'pyplanet.core', 'pyplanet.core.events')}
+	sys.modules.update({
+		'pyplanet': root, 'pyplanet.core': core, 'pyplanet.core.events': events})
+	try:
+		cb.make_callback(code, target=target)
+	finally:
+		for name, module in saved.items():
+			if module is None:
+				sys.modules.pop(name, None)
+			else:
+				sys.modules[name] = module
+	return recorder[0]
+
+
+def test_make_callback_uses_the_script_dispatch_key():
+	# PyPlanet dispatches mode script callbacks with
+	# SignalManager.get_callback('Script.' + name), so `call` must carry that exact
+	# prefixed name. Using the transport name ('ModeScriptCallback') registers under
+	# a key nothing is dispatched to and every payload is silently dropped.
+	assert _make_callback('KOMatchStandings')['call'] == 'Script.KOMatchStandings'
+
+
+def test_make_callback_keeps_signal_identity_unprefixed():
+	# The prefix belongs to the raw dispatch key only; the PyPlanet-side signal is
+	# still script:KOMatchStandings, which register() listens on by name.
+	built = _make_callback('KOMatchStandings')
+	assert built['namespace'] == 'script'
+	assert built['code'] == 'KOMatchStandings'
+
+
+def test_every_contract_callback_gets_its_own_dispatch_key():
+	# One shared key would let the eight callbacks overwrite each other in
+	# SignalManager.callbacks -- the second failure mode of the transport-name bug.
+	keys = {code: _make_callback(code)['call'] for code in cb.ALL_CALLBACKS}
+	assert len(set(keys.values())) == len(cb.ALL_CALLBACKS)
+	assert all(key.startswith(cb.SCRIPT_CALL_PREFIX) for key in keys.values())
 
 
 if __name__ == '__main__':

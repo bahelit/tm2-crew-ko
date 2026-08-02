@@ -774,8 +774,9 @@ class KnockoutConfig(AppConfig):
 
 	async def handle_knockout_callback(self, signal, **kwargs):
 		code = signal.code
-		payload = kwargs.get('player_login') or kwargs.get('login')
-		login = payload[0] if isinstance(payload, (list, tuple)) and len(payload) > 0 else str(payload)
+		# These three are registered without a parser, so the payload arrives as
+		# `source` -- see callbacks.callback_login.
+		login = callbacks.callback_login(kwargs)
 
 		# Live overlays / markers react regardless of the chat-notification setting.
 		live = getattr(self, 'live', None)
@@ -792,11 +793,11 @@ class KnockoutConfig(AppConfig):
 			return
 
 		if code == 'KOPlayerAdded':
-			await self._handle_player_added(payload)
+			await self._handle_player_added(login)
 		elif code == 'KOPlayerRemoved':
-			await self._handle_player_removed(payload)
+			await self._handle_player_removed(login)
 		elif code == 'KOSendWinner':
-			await self._handle_winner(payload)
+			await self._handle_winner(login)
 
 	async def _resolve_player_name(self, login):
 		try:
@@ -805,32 +806,29 @@ class KnockoutConfig(AppConfig):
 		except Exception:
 			return login
 
-	async def _handle_player_added(self, payload):
+	async def _handle_player_added(self, login):
 		show_join = await self.setting_show_join.get_value()
 		if not show_join:
 			return
 
-		login = payload[0] if isinstance(payload, (list, tuple)) and len(payload) > 0 else str(payload)
 		name = await self._resolve_player_name(login)
 		msg = '$f90>>> $fff{name} $f90joined Knockout!'.format(name=name)
 		await self.instance.chat(msg)
 
-	async def _handle_player_removed(self, payload):
+	async def _handle_player_removed(self, login):
 		show_knockout = await self.setting_show_knockout.get_value()
 		if not show_knockout:
 			return
 
-		login = payload[0] if isinstance(payload, (list, tuple)) and len(payload) > 0 else str(payload)
 		name = await self._resolve_player_name(login)
 		msg = '$f00>>> $fff{name} $f00was knocked out!'.format(name=name)
 		await self.instance.chat(msg)
 
-	async def _handle_winner(self, payload):
+	async def _handle_winner(self, login):
 		show_winner = await self.setting_show_winner.get_value()
 		if not show_winner:
 			return
 
-		login = payload[0] if isinstance(payload, (list, tuple)) and len(payload) > 0 else str(payload)
 		name = await self._resolve_player_name(login)
 		self._match_winner = login
 		msg = '$0f0>>> $fff{name} $0f0is the winner!'.format(name=name)

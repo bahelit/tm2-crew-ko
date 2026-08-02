@@ -4,7 +4,7 @@ from pyplanet.apps.core.maniaplanet import callbacks as mp_signals
 from pyplanet.apps.core.trackmania import callbacks as tm_signals
 
 from ..models import MatchInfo
-from ..callbacks import parse_round_order, parse_round_start, first_login, register
+from ..callbacks import parse_round_order, parse_round_start, callback_login, register
 from ..hud_format import (
 	format_race_time, format_gap, split_cp_label, waypoint_cp_count, describe_payload)
 
@@ -481,7 +481,7 @@ class LiveController:
 
 	async def on_shield_awarded(self, signal=None, **kwargs):
 		self.callbacks_seen['KOShieldAwarded'] = self.callbacks_seen.get('KOShieldAwarded', 0) + 1
-		login = first_login(kwargs.get('player_login') or kwargs.get('login'))
+		login = callback_login(kwargs)
 		if login:
 			self.shield_holders.add(login)
 		await self._flash_shield(login, awarded=True)
@@ -490,7 +490,7 @@ class LiveController:
 
 	async def on_shield_used(self, signal=None, **kwargs):
 		self.callbacks_seen['KOShieldUsed'] = self.callbacks_seen.get('KOShieldUsed', 0) + 1
-		login = first_login(kwargs.get('player_login') or kwargs.get('login'))
+		login = callback_login(kwargs)
 		if login:
 			self.shield_holders.discard(login)
 		await self._flash_shield(login, awarded=False)

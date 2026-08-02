@@ -40,7 +40,13 @@ A multi-map competition. Each map is one knockout match; placements earn cup poi
 
 That one command stops any running BOTN, loads the Knockout mode with the Friday settings (warm-up, shields, …), and starts a cup that spans the whole playlist. (`//cup setup knockout_friday` is still available if you only want to load the mode without starting a cup.)
 
-**Deploy both the app and the mode script.** Cup points and auto-complete only fire when Knockout finishes a map and emits `KOMatchStandings`. That requires the repo’s `Modes/Trackmania/Knockout.Script.txt` on the dedicated server (not only `apps/knockout/`). An old mode script can loop rounds forever so maps never score — or, worse, play a flawless knockout while sending no callbacks at all. If `//ko hud` shows every `KO*` count at 0, deploy both halves and restart both services: mode scripts before 2026-08-02 routed `KO*` through the legacy XmlRpc lib, which the ModeBase2 chain never enables, and the v2 lib boots disabled — PyPlanet sends `XmlRpc.EnableCallbacks` only once, when it connects, so every mode script loaded afterwards (which is exactly what `//cup on` does) started up mute. The mode now enables the library itself, and the app re-arms it on each map.
+**Deploy both the app and the mode script.** Cup points and auto-complete only fire when Knockout finishes a map and emits `KOMatchStandings`. That requires the repo’s `Modes/Trackmania/Knockout.Script.txt` on the dedicated server (not only `apps/knockout/`). An old mode script can loop rounds forever so maps never score — or, worse, play a flawless knockout while sending no callbacks at all. If `//ko hud` shows every `KO*` count at 0, deploy both halves and restart both services. Three independent breaks in that one path were fixed on 2026-08-02, any one of which silenced the lot:
+
+1. The mode sent `KO*` through the legacy XmlRpc lib, whose enable flag the ModeBase2 chain never sets.
+2. The v2 lib boots disabled and PyPlanet sends `XmlRpc.EnableCallbacks` only once, when it connects — so every mode script loaded afterwards (exactly what `//cup on` does) started up mute. The mode now enables the library itself and the app re-arms it each map.
+3. The app registered its callbacks under `ModeScriptCallback`, the name of the *transport* callback. PyPlanet dispatches script callbacks as `Script.<name>` (`GbxRemote.handle_scripted`), so nothing was ever routed to them and all eight shared one registry key.
+
+None of the three produced an error on either side — the knockout plays, chats and crowns a winner while the app records nothing.
 
 The cup auto-completes after every map in the playlist has been **recorded** (chat: `Cup … — map X / Y recorded`), announces the **winner** and top 3 in chat, opens standings for everyone online, and returns to TimeAttack. Points on the left HUD update after each recorded map — not mid-race.
 

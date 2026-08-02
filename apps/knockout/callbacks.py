@@ -21,8 +21,9 @@ Every callback's payload is parsed here so the controllers only subscribe and
 react -- they never re-implement the wire format.
 """
 
-# Single-login callbacks: simple payload, no parser target. The listener gets the
-# raw ``player_login`` / ``login`` kwarg and pulls the login out with first_login.
+# Single-login callbacks: simple payload, no parser target. With no target the
+# listener is called with just ``signal`` and ``source``; use callback_login() to
+# read it -- there is no ``login`` kwarg on this path.
 SINGLE_LOGIN_CALLBACKS = (
 	'KOPlayerAdded',
 	'KOPlayerRemoved',
@@ -133,14 +134,65 @@ def first_login(payload):
 	return str(payload) if payload is not None else ''
 
 
+#: Receiver kwargs that can carry an unparsed payload, best first. ``source`` is the
+#: real one; the other two are what PyPlanet's own *parsed* callbacks expose, kept
+#: here so a handler cannot break if a callback later grows a target parser.
+LOGIN_KWARGS = ('source', 'player_login', 'login')
+
+
+def callback_login(kwargs):
+	"""Pull the login out of an **unparsed** ``KO*`` callback's receiver kwargs.
+
+	A Callback built without a ``target`` keeps PyPlanet's default processor, and
+	``Signal.send`` calls it as ``process_target(signal=self, source=source)`` while
+	``Signal.process(**data)`` returns its input untouched. So receivers on this path
+	are called with exactly two kwargs -- ``signal`` and ``source`` -- and never a
+	``login``: that one belongs to stock callbacks that ship their own parser.
+
+	Reading ``login``/``player_login`` here produced the literal string ``'None'``
+	for every player added, knocked out and winner, which then failed to match any
+	real login. Returns '' when nothing usable is present.
+	"""
+	for key in LOGIN_KWARGS:
+		value = kwargs.get(key)
+		if value is not None:
+			return first_login(value)
+	return ''
+
+
 # --------------------------------------------------------------------------- wiring
 # The helpers below import PyPlanet lazily so this module stays import-clean for
 # the pure unit tests (tests/test_callbacks.py loads it by file path).
 
+#: PyPlanet's dispatcher prefix for mode script callbacks. ``GbxRemote.handle_scripted``
+#: receives the ManiaPlanet.ModeScriptCallback[Array] transport callback, pulls the
+#: script's own callback name out of the payload, and dispatches with
+#: ``SignalManager.get_callback('Script.' + name)`` -- so that prefixed string, not the
+#: transport name, is the key a Callback must register itself under.
+SCRIPT_CALL_PREFIX = 'Script.'
+
+
 def make_callback(code, target=None):
-	"""Build a PyPlanet ModeScript Callback for a ``KO*`` code."""
+	"""Build a PyPlanet ModeScript Callback for a ``KO*`` code.
+
+	``call`` is the RAW dispatch key, not a description of the transport:
+	``Callback.__init__`` does ``SignalManager.register_signal(Signal(code=call,
+	namespace='raw'), callback=True)``, which files the callback under exactly that
+	string, and ``handle_scripted`` looks it up as ``Script.<name>``. Stock PyPlanet
+	callbacks follow the same rule (``call='Script.Trackmania.Event.WayPoint'``).
+
+	Passing the literal ``'ModeScriptCallback'`` -- the name of the *transport*
+	callback that carries every script callback -- registers under a key nothing is
+	ever dispatched to. The mode sends, the dedicated server delivers, PyPlanet's
+	``if signal:`` finds nothing and drops the payload on the floor. No exception, no
+	log line, no partial behaviour: every ``KO*`` count in ``//ko hud`` reads 0 while a
+	knockout plays perfectly. It also collided all eight KO callbacks onto one
+	registry key, so they overwrote each other on the way in.
+	"""
 	from pyplanet.core.events import Callback
-	return Callback(call='ModeScriptCallback', namespace='script', code=code, target=target)
+	return Callback(
+		call='{}{}'.format(SCRIPT_CALL_PREFIX, code),
+		namespace='script', code=code, target=target)
 
 
 def register(app, code, handler, target=None):

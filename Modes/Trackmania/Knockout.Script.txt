@@ -18,8 +18,9 @@
 //     ---Label--- site, parent first then child). Match_LogVersions is plural
 //     (injected by ModeTrackmania); spawning is the ---Rounds_CanSpawn--- override
 //     (survivors = IsRacing); "wait for >=2 players" is the Rounds_WaitForPlayers
-//     hook; KO_WarmUp(S_WarmUpNb, limit) = S_WarmUpNb warm-up rounds (limit from
-//     S_WarmUpDuration: <0 round mode, >0 TA seconds); 0 rounds = none;
+//     hook; KO_WarmUp(S_WarmUpNb, cap) = S_WarmUpNb warm-up rounds, each ending
+//     when the last player finishes or gives up (cap from S_WarmUpDuration:
+//     <0 no cap, >0 seconds, 0 auto); 0 rounds = none;
 //     matchmaking off via Match_Settings (MB_Settings_UseDefaultMatchmaking=False).
 //   * XmlRpc:: in this chain binds to Libs/Nadeo/XmlRpc2 (RegisterCallback /
 //     UnregisterCallback / PassOn exist there, but NOT SendCallbackArray /
@@ -74,7 +75,7 @@
 #Setting S_DoubleKnockUntil		20		as _("DoubleKO - knock 2 players until (0 = disabled):")
 #Setting S_PracticeRounds		0		as _("Practice rounds before eliminations start (0 = disabled):")
 #Setting S_WarmUpNb				0		as _("Warm-up rounds before the knockout begins (0 = none):")
-#Setting S_WarmUpDuration		-1		as _("Warm-up duration in seconds (-1 = full-map rounds, >0 = TA time limit):")
+#Setting S_WarmUpDuration		-1		as _("Warm-up time cap per round in seconds (-1 = none; a round ends when everyone is done):")
 #Setting S_FinishCountdown		30		as _("Seconds to finish after the first player (DNFs the rest):")
 #Setting S_EnableShields		False	as _("Earned shields: warm-up fastest banks a one-time save:")
 #Setting S_DebugBotsCount		0		as _("Number of fake players (debug only):")
@@ -308,10 +309,11 @@ UIManager.UIAll.BigMessage = "";
 
 // Warm-up before the knockout begins.
 // S_WarmUpNb = number of warm-up rounds (0 skips; e.g. BOTN TA practice already served).
-// S_WarmUpDuration (seconds) selects the time-limit mode for each round:
-//   < 0  → round mode (-1 ms): full-map laps, no clock (BOTN default)
-//   == 0 → TA with auto limit from author time
-//   > 0  → TA with that many seconds (cup Friday uses 120 = 2 minutes per round)
+// Every warm-up round ends as soon as the last player has finished or given up.
+// S_WarmUpDuration (seconds) only caps how long a round may drag on:
+//   < 0  → no cap: the round runs until everyone is done (BOTN default)
+//   == 0 → cap derived from the author time
+//   > 0  → cap of that many seconds (cup Friday uses 120 = 2 minutes per round)
 // The PyPlanet app sets S_WarmUpNb / S_WarmUpDuration per event (BOTN / cup presets).
 //
 // Use KO_WarmUp (not stock MB_WarmUp): the base warm-up loop only Valid()s events and
@@ -324,13 +326,13 @@ UIManager.UIAll.BigMessage = "";
 // running mode. That brief pause guarantees the freshly-pushed count is in place before
 // warm-up reads it -- reading it at the very top raced the push and could give zero
 // warm-up laps. See apps/knockout/botn.py (_switch_to_knockout).
-declare Integer WarmUpTimeLimit = -1;
+declare Integer WarmUpCap = -1;
 if (S_WarmUpDuration > 0) {
-	WarmUpTimeLimit = S_WarmUpDuration * 1000;
+	WarmUpCap = S_WarmUpDuration * 1000;
 } else if (S_WarmUpDuration == 0) {
-	WarmUpTimeLimit = 0;
+	WarmUpCap = 0;
 }
-KO_WarmUp(S_WarmUpNb, WarmUpTimeLimit);
+KO_WarmUp(S_WarmUpNb, WarmUpCap);
 UpdatePlayerColors();
 ***
 
@@ -880,16 +882,25 @@ Void XmlRpc_KOShieldUsed(CTmPlayer _Player) {
 /** Warm-up that records best finish times for shield awards.
     Stock MB_WarmUp only Valid()s events and never stores BestRace, so the
     warm-up-fastest shield path always saw an empty field. This mirrors the base
-    warm-up UI (WarmUp::Start/StartRound/End) while filling G_WarmUpBestTimes. */
-Void KO_WarmUp(Integer _NbOfWarmUp, Integer _TimeLimit) {
+    warm-up UI (WarmUp::Start/StartRound/End) while filling G_WarmUpBestTimes.
+
+    _CapMillisec is a BACKSTOP, not the round length: a warm-up round is over as
+    soon as every player has finished or given up. WarmUp::StartRound is always
+    called in round mode (-1) because that is the only mode where the lib parks a
+    player after their run (finish -> TM::EndRace, give-up -> TM::WaitRace, neither
+    respawned) and ends the round on `PlayersRacing.count <= 0`. Passing a real
+    time limit flips the lib into time-limited mode, which respawns everyone
+    forever and disables that check -- that is why the Friday cup warm-up only
+    ended when the 2-minute clock expired. The cap is enforced here instead. */
+Void KO_WarmUp(Integer _NbOfWarmUp, Integer _CapMillisec) {
 	if (_NbOfWarmUp <= 0) return;
 
-	declare TimeLimit = _TimeLimit;
-	if (TimeLimit == 0) {
+	declare Cap = _CapMillisec;
+	if (Cap == 0) {
 		declare ObjectiveNbLaps = Map.TMObjective_NbLaps;
 		if (ObjectiveNbLaps <= 0 || !Map.TMObjective_IsLapRace) ObjectiveNbLaps = 1;
 		declare MaxTime = Map.TMObjective_AuthorTime / ObjectiveNbLaps;
-		TimeLimit = 5000 + MaxTime + (MaxTime / 6);
+		Cap = 5000 + MaxTime + (MaxTime / 6);
 	}
 
 	declare PrevUISequence = UIManager.UIAll.UISequence;
@@ -898,8 +909,15 @@ Void KO_WarmUp(Integer _NbOfWarmUp, Integer _TimeLimit) {
 	WarmUp::Start();
 	declare WarmUpPlayedNb = 0;
 	while (!WarmUp::Finished() && WarmUpPlayedNb < _NbOfWarmUp && !ServerShutdownRequested && !MatchEndRequested) {
-		WarmUp::StartRound(WarmUpPlayedNb + 1, _NbOfWarmUp, TimeLimit);
+		WarmUp::StartRound(WarmUpPlayedNb + 1, _NbOfWarmUp, -1);
+		// StartRound spends 3s on the "Warmup: x/y" message then 3s on the spawn
+		// countdown before anyone can drive, so the cap starts from that point.
+		// CutOffTimeLimit is left alone (-1 in round mode) so the lib can still arm
+		// its own straggler timeout when the first player finishes.
+		declare RoundDeadline = -1;
+		if (Cap > 0) RoundDeadline = Now + 6000 + Cap;
 		while (!WarmUp::Finished() && !WarmUp::RoundFinished() && !ServerShutdownRequested && !MatchEndRequested) {
+			if (RoundDeadline > 0 && Now >= RoundDeadline) break;
 			MB_Yield();
 
 			foreach (Event in PendingEvents) {

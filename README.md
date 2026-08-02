@@ -58,7 +58,7 @@ During cups and BOTN the player HUD package is always on (no admin toggles neede
 
 **Stream box:** the ticker + elimination lower-third go to **pure spectators automatically** (your dedicated spectator capture client). During warm-up the ticker shows `PRACTICE`; during rounds it shows racing count / danger bubble. Racers do not see them. If the stream machine is not a pure spectator, run `/ko stream on` (or `/ko stream status` to check). Admins can push them to *everyone* with `show_overlays` in `//settings`.
 
-**Warm-up (Friday):** three **2-minute** practice periods per map (`S_WarmUpNb=3`, `S_WarmUpDuration=120`). Free restarts within each period; not unlimited full-map laps. Deploy the mode script so `S_WarmUpDuration` is honoured.
+**Warm-up (Friday):** three practice rounds per map (`S_WarmUpNb=3`). A round ends as soon as **every player has finished their lap or given up** — `S_WarmUpDuration=120` is only a 2-minute cap for stragglers, not the round length. Deploy the mode script so warm-up rounds end early instead of running out the clock.
 
 **Shields** (Friday preset on, BOTN off): after the map’s warm-up, the **fastest warm-up finish** earns one save. It is spent only when that player would be eliminated as last place (not on DNF/give-up), and it does **not** push the knock onto the next player. The left match HUD shows `✚` next to holders until the shield is used. Deploy both `apps/knockout/` and `Modes/Trackmania/Knockout.Script.txt` for this to take effect (the mode must include `KO_WarmUp` so warm-up times are recorded for the award).
 

@@ -628,6 +628,9 @@ class BotnController:
 		# update below (and on_map_start) is what actually holds the map open.
 		await self._apply_mode_settings(settings, stage=True)
 		if restart:
+			# Practice is plain TimeAttack: clear any warm-up rounds a previous
+			# knockout left in the server's settings before it loads.
+			await self.app.clear_knockout_warmup()
 			await self._load_script(TIMEATTACK_SCRIPT)
 			if await self._await_script(TIMEATTACK_SCRIPT):
 				await self._apply_mode_settings(settings, stage=False)

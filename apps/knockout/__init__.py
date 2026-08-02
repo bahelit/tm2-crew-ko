@@ -21,6 +21,15 @@ from .models import MatchInfo, PlayerScore, CupInfo, CupMatch  # noqa: F401  (re
 
 logger = logging.getLogger(__name__)
 
+# Settings pushed whenever the server is handed back to its TimeAttack resting
+# state. Mode script settings live in ONE server-side map keyed by setting NAME,
+# so they outlive the script that set them: TimeAttack.Script.txt declares the
+# same S_WarmUpNb / S_WarmUpDuration and calls MB_WarmUp() with them at map
+# start, which means a knockout's warm-up rounds (the Friday preset and BOTN
+# both stage 3) carry straight into the idle server and every resting map opens
+# with a warm-up. These are TimeAttack's own declared defaults.
+TIMEATTACK_RESET_SETTINGS = {'S_WarmUpNb': 0, 'S_WarmUpDuration': 0}
+
 
 class KnockoutConfig(AppConfig):
 	game_dependencies = ['trackmania']
@@ -434,9 +443,31 @@ class KnockoutConfig(AppConfig):
 		"""Keep mode script callbacks armed across map and script changes."""
 		await self.enable_script_callbacks()
 
+	async def clear_knockout_warmup(self):
+		"""Zero the warm-up settings on the way back to TimeAttack.
+
+		Must run BEFORE the script switch: TimeAttack reads S_WarmUpNb in its own
+		Match_StartMap, so a value cleared afterwards is one map too late. See
+		TIMEATTACK_RESET_SETTINGS for why anything is inherited at all.
+		"""
+		mm = self.instance.mode_manager
+		# Live push is what actually clears it -- the value carries into the next
+		# script -- but stage it too, for hosts that flush next-settings on load.
+		try:
+			stage = getattr(mm, 'update_next_settings', None)
+			if stage is not None:
+				await stage(dict(TIMEATTACK_RESET_SETTINGS))
+		except Exception:
+			logger.exception('Knockout: failed to stage the TimeAttack warm-up reset')
+		try:
+			await mm.update_settings(dict(TIMEATTACK_RESET_SETTINGS))
+		except Exception:
+			logger.exception('Knockout: failed to clear the knockout warm-up settings')
+
 	async def return_to_timeattack(self):
 		"""Drop the server back to its TimeAttack resting state (next-map switch +
 		RestartMap so it takes effect on the current map)."""
+		await self.clear_knockout_warmup()
 		try:
 			await self.instance.mode_manager.set_next_script(TIMEATTACK_SCRIPT)
 			await self.instance.gbx('RestartMap')
@@ -640,6 +671,9 @@ class KnockoutConfig(AppConfig):
 		when a knockout map is ending (e.g. a cup just completed on its last map): the
 		mode's own map-end advances to the next playlist map, which then loads in
 		TimeAttack rather than continuing the knockout rotation."""
+		# This is the usual end-of-cup path (capture arms it on the last map), so the
+		# warm-up reset has to happen here too, not just in return_to_timeattack.
+		await self.clear_knockout_warmup()
 		try:
 			await self.instance.mode_manager.set_next_script(TIMEATTACK_SCRIPT)
 		except Exception:

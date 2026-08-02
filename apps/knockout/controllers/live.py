@@ -76,6 +76,10 @@ class LiveController:
 		self.season_points = {}
 		self.cup_active = False
 		self.cup_name = ''
+		# Cup progress for the HUD's MAP line: maps already recorded, and the target
+		# map count (0 = open-ended). Refreshed alongside season_points.
+		self.cup_maps_played = 0
+		self.cup_map_count = 0
 		# True when the active cup is a Bowl of the Night, so the HUD can show the
 		# "BOWL OF THE NIGHT" title instead of the generic "MATCH n".
 		self.is_botn = False
@@ -206,15 +210,20 @@ class LiveController:
 		with zeros -- from the first map, before any map has been recorded. No cup ->
 		empty + inactive. Called only on infrequent paths (map start, match recorded,
 		cup start/stop), never per-render, since compute_standings sums every map."""
-		cup = getattr(self.app.cup, 'active_cup', None) if getattr(self.app, 'cup', None) else None
+		cup_ctrl = getattr(self.app, 'cup', None)
+		cup = getattr(cup_ctrl, 'active_cup', None) if cup_ctrl else None
 		if not cup:
 			self.season_points = {}
 			self.cup_active = False
 			self.cup_name = ''
+			self.cup_maps_played = 0
+			self.cup_map_count = 0
 			self.is_botn = False
 			return
 		self.cup_active = True
 		self.cup_name = getattr(cup, 'name', '') or ''
+		self.cup_maps_played = int(getattr(cup_ctrl, 'maps_played', 0) or 0)
+		self.cup_map_count = int(getattr(cup, 'map_count', 0) or 0)
 		self.is_botn = (getattr(cup, 'cup_key', None) == 'botn')
 		try:
 			standings = await self.app.results.compute_standings(cup)

@@ -7,25 +7,19 @@
 	<!-- body backing: sized in the view so it always covers stats + every player row -->
 	<quad pos="0. -{{ title_h }}." size="{{ bg_width }}. {{ body_height }}." halign="left" valign="top" z-index="-1" bgcolor="000000" opacity="0.8" />
 
-	<!-- header stats -->
-	<label pos="2. {{ stats_y[0] }}." size="34. 3." halign="left" valign="top" z-index="1"
-		textsize="1" textfont="GameFontSemiBold" textcolor="FFFFFF" text="ROUND" />
-	<label pos="{{ header_val_x }}. {{ stats_y[0] }}." size="20. 3." halign="right" valign="top" z-index="1"
-		textsize="1" textfont="GameFontSemiBold" textcolor="FFFFFF" text="{{ round_text }}" />
+	<!-- header stats: MAP (cup only), ROUND, PLAYERS, KOS PER ROUND -->
+	{% for stat in stats %}
+	<label pos="2. {{ stat.y }}." size="28. 3." halign="left" valign="top" z-index="1"
+		textsize="1" textfont="GameFontSemiBold" textcolor="FFFFFF" text="{{ stat.label }}" />
+	<label pos="{{ header_val_x }}. {{ stat.y }}." size="24. 3." halign="right" valign="top" z-index="1"
+		textsize="1" textfont="GameFontSemiBold" textcolor="FFFFFF" text="{{ stat.value }}" />
+	{% endfor %}
+
+	<!-- points column heading, in the gap between the stats and the first row -->
 	{% if show_season %}
-	<label pos="{{ pts_x }}. {{ stats_y[0] }}." size="12. 3." halign="right" valign="top" z-index="1"
+	<label pos="{{ pts_x }}. {{ col_head_y }}." size="12. 3." halign="right" valign="top" z-index="1"
 		textsize="0" textfont="GameFontSemiBold" textcolor="FFCC00" text="CUP" />
 	{% endif %}
-
-	<label pos="2. {{ stats_y[1] }}." size="34. 3." halign="left" valign="top" z-index="1"
-		textsize="1" textfont="GameFontSemiBold" textcolor="FFFFFF" text="PLAYERS" />
-	<label pos="{{ header_val_x }}. {{ stats_y[1] }}." size="20. 3." halign="right" valign="top" z-index="1"
-		textsize="1" textfont="GameFontSemiBold" textcolor="FFFFFF" text="{{ players_count }}" />
-
-	<label pos="2. {{ stats_y[2] }}." size="28. 3." halign="left" valign="top" z-index="1"
-		textsize="1" textfont="GameFontSemiBold" textcolor="FFFFFF" text="KOS PER ROUND" />
-	<label pos="{{ header_val_x }}. {{ stats_y[2] }}." size="24. 3." halign="right" valign="top" z-index="1"
-		textsize="1" textfont="GameFontSemiBold" textcolor="FFFFFF" text="{{ ko_text }}" />
 
 	{% if has_divider %}
 	<quad pos="2. {{ divider_y }}." size="{{ divider_w }}. 0.25." halign="left" valign="top" z-index="1" bgcolor="FFFFFF" opacity="0.5" />

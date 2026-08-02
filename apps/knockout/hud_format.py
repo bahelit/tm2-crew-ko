@@ -178,6 +178,27 @@ def round_value(round_no, total):
 	return str(round_no)
 
 
+def cup_map_value(maps_played, map_count):
+	"""Right-hand value for the HUD's ``MAP`` line while a cup runs: ``2 of 3``.
+
+	``maps_played`` counts the maps already *recorded*, so the one being played now
+	is the next one up. Open-ended cups (map_count 0) show a bare map number. The
+	current map is clamped to the target so the last map cannot briefly read
+	``4 of 3`` in the window between its standings landing and the cup completing."""
+	try:
+		played = max(0, int(maps_played))
+	except (TypeError, ValueError):
+		played = 0
+	try:
+		total = int(map_count)
+	except (TypeError, ValueError):
+		total = 0
+	current = played + 1
+	if total > 0:
+		return '{} of {}'.format(min(current, total), total)
+	return str(current)
+
+
 def hud_applies(is_knockout, cup_active):
 	"""Whether the match HUD should be shown: always during Knockout, and also
 	during an active cup's TimeAttack phases (BOTN practice, between maps)."""

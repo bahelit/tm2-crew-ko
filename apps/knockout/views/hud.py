@@ -2,16 +2,23 @@ from pyplanet.views.template import TemplateView
 
 from ..hud_format import (
 	format_race_time, format_gap, format_hud_name, match_label, round_value,
-	ko_per_round_label, hud_applies, is_practice_phase, ml_num,
+	ko_per_round_label, hud_applies, is_practice_phase, ml_num, cup_map_value,
 )
 
 # Layout mirrors the BOTN countdown: a title tab (TITLE_H) then a body panel.
 # Stats sit just under the tab; player rows follow. All geometry is precomputed
-# here so the template never does float arithmetic.
+# here so the template never does float arithmetic. The stats block is variable
+# length (a MAP line joins it during a cup), so the rows below it are positioned
+# off the last stat line rather than a fixed constant.
 TITLE_H = 7
-STATS_Y = (-9, -13, -17)   # ROUND, PLAYERS, KOS PER ROUND
-START_Y = -22
+STATS_TOP = -9   # y of the first stat line
+STATS_STEP = 4   # spacing between stat lines
 ROW_H = 4
+
+# Gap between the last stat line and the first player row. The points column gets
+# its own "CUP" heading in that gap, so it needs a wider one when it is shown.
+ROWS_GAP = 5
+ROWS_GAP_SEASON = 9
 
 # When more players are listed than MAX_ROWS, the middle is collapsed to a single
 # "…" marker: the top HEAD_ROWS and the trailing rows (which include the danger
@@ -48,6 +55,8 @@ class MatchHud(TemplateView):
 		self.id = 'knockout__match_hud'
 		self.match_text = 'KNOCKOUT'
 		self.round_text = '—'
+		self.map_text = ''
+		self.show_map = False
 		self.players_count = 0
 		self.ko_text = '1'
 		self.rows = []
@@ -59,20 +68,28 @@ class MatchHud(TemplateView):
 	async def get_context_data(self):
 		data = await super().get_context_data()
 		data['match_text'] = self.match_text
-		data['round_text'] = self.round_text
 		data['players_count'] = self.players_count
 		data['ko_text'] = self.ko_text
 		data['rows'] = self.rows
 		data['has_divider'] = self.has_divider
 		data['divider_y'] = ml_num(self.divider_y)
 		data['title_h'] = ml_num(TITLE_H)
-		data['stats_y'] = [ml_num(y) for y in STATS_Y]
+		data['stats'] = [
+			dict(label=label, value=value, y=ml_num(STATS_TOP - index * STATS_STEP))
+			for index, (label, value) in enumerate(self._stats())
+		]
 		# Season column: widen the panel and shift the time column left to make room
 		# for a right-hand points column. All geometry is precomputed here so the
 		# template stays arithmetic-free.
 		data['show_season'] = self.show_season
 		bg_width = 64 if self.show_season else 54
-		body_height = 15 + len(self.rows) * ROW_H
+		rows_start = self._rows_start()
+		# Body runs from under the title tab to just past the last player row.
+		body_height = -rows_start - TITLE_H + len(self.rows) * ROW_H
+		# "CUP" heading for the points column, in the gap above the first row. It
+		# cannot share a stat line: the stat values are right-aligned at the same
+		# panel edge and would be drawn over.
+		data['col_head_y'] = ml_num(rows_start + ROW_H)
 		data['bg_width'] = ml_num(bg_width)
 		data['body_height'] = ml_num(body_height)
 		data['title_w'] = ml_num(bg_width - 4)
@@ -119,6 +136,12 @@ class MatchHud(TemplateView):
 			self.round_text = 'PRACTICE'
 		else:
 			self.round_text = round_value(getattr(live, 'round', 0), getattr(live, 'total_rounds', 0))
+		# MAP line: which map of the cup is being played. Only while a cup runs --
+		# a standalone knockout is a single map and the line would say "1".
+		self.show_map = bool(cup_active)
+		self.map_text = cup_map_value(
+			getattr(live, 'cup_maps_played', 0), getattr(live, 'cup_map_count', 0)
+		) if self.show_map else ''
 		danger = set() if practice else set(live.danger_logins())
 		shields = set(getattr(live, 'shield_holders', None) or ())
 
@@ -195,6 +218,23 @@ class MatchHud(TemplateView):
 
 	# ------------------------------------------------------------- helpers
 
+	def _stats(self):
+		"""The header stat lines, top to bottom, as (label, value) pairs. MAP joins
+		them while a cup is running so the field can see how far along it is."""
+		stats = []
+		if self.show_map:
+			stats.append(('MAP', self.map_text))
+		stats.append(('ROUND', self.round_text))
+		stats.append(('PLAYERS', self.players_count))
+		stats.append(('KOS PER ROUND', self.ko_text))
+		return stats
+
+	def _rows_start(self):
+		"""y of the first player row: below the (variable-length) stats block, with
+		room for the points column's heading when that column is shown."""
+		gap = ROWS_GAP_SEASON if self.show_season else ROWS_GAP
+		return STATS_TOP - (len(self._stats()) - 1) * STATS_STEP - gap
+
 	@staticmethod
 	def _as_int(value):
 		try:
@@ -216,8 +256,9 @@ class MatchHud(TemplateView):
 		row, and gild the last safe time (the bubble) just above the cut line."""
 		self.has_divider = False
 		self.divider_y = 0
+		start_y = self._rows_start()
 		for index, row in enumerate(rows):
-			row['y'] = ml_num(START_Y - index * ROW_H)
+			row['y'] = ml_num(start_y - index * ROW_H)
 			if not self.has_divider and not row.get('gap') and row.get('danger'):
 				self.has_divider = True
 				self.divider_y = ml_num(row['y'] + 1)
@@ -238,6 +279,8 @@ class MatchHud(TemplateView):
 		only to ``player`` when given, otherwise to everyone (the real path)."""
 		self.match_text = 'MATCH 30'
 		self.round_text = '12/21'
+		self.map_text = ''
+		self.show_map = False
 		self.players_count = 4
 		self.ko_text = '2 UNTIL 8 PLAYERS'
 		self.show_season = False

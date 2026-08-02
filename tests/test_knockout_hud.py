@@ -98,6 +98,19 @@ def test_round_value():
 	assert hud.round_value('x', 5) == '—'
 
 
+def test_cup_map_value():
+	# maps_played counts RECORDED maps, so the one being raced is the next one.
+	assert hud.cup_map_value(0, 3) == '1 of 3'
+	assert hud.cup_map_value(1, 3) == '2 of 3'
+	# Open-ended cup: no target to count towards.
+	assert hud.cup_map_value(2, 0) == '3'
+	# Between the last map's standings landing and the cup completing, played
+	# already equals the target -- never show "4 of 3".
+	assert hud.cup_map_value(3, 3) == '3 of 3'
+	assert hud.cup_map_value(None, None) == '1'
+	assert hud.cup_map_value('x', 3) == '1 of 3'
+
+
 def test_ml_num_avoids_broken_size_syntax():
 	# Jinja would render 64.0 as "64.0", producing size="64.0. 38.0." (invalid).
 	assert hud.ml_num(64.0) == 64

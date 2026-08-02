@@ -1,4 +1,10 @@
-<frame pos="118. -52." z-index="50">
+<!--
+	Bottom right above the splits feed: 40 wide, 23 tall, so this card covers
+	x 118..158 / y -32..-55. It has to end above y=-56, where the splits panel
+	starts (it reaches x=126, under this card) -- the two are shown together
+	during a round, so keep the gap if either moves.
+-->
+<frame pos="118. -32." z-index="50">
 	<!-- card -->
 	<quad pos="0. 0." size="40. 23." halign="left" valign="top" z-index="-1"
 		style="Bgs1InRace" substyle="BgCardSystem" opacity="0.92" />

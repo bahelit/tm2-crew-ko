@@ -1,4 +1,11 @@
-<frame pos="48. -56." z-index="50">
+<!--
+	Bottom right, 64 wide (x 62..126) and up to ~31 tall with a full six-row feed.
+	x=62 keeps the panel clear of the game's own checkpoint/time widget under the
+	centre of the screen (its right edge sits near x=50) and of the stream lower
+	third (which ends at x=60). The finish countdown shares this corner and is
+	parked above y=-56 so the two never overlap -- move one, check the other.
+-->
+<frame pos="62. -56." z-index="50">
 	<!-- header tab: black box + white bold label, matching the match panel -->
 	<quad pos="0. 0." size="64. 5.4." halign="left" valign="top" z-index="-1" bgcolor="000000" opacity="0.85" />
 	<label pos="2. -1.1." size="60. 3.4." halign="left" valign="top" z-index="1"

@@ -40,7 +40,7 @@ A multi-map competition. Each map is one knockout match; placements earn cup poi
 
 That one command stops any running BOTN, loads the Knockout mode with the Friday settings (warm-up, shields, …), and starts a cup that spans the whole playlist. (`//cup setup knockout_friday` is still available if you only want to load the mode without starting a cup.)
 
-**Deploy both the app and the mode script.** Cup points and auto-complete only fire when Knockout finishes a map and emits `KOMatchStandings`. That requires the repo’s `Modes/Trackmania/Knockout.Script.txt` on the dedicated server (not only `apps/knockout/`). An old mode script can loop rounds forever so maps never score.
+**Deploy both the app and the mode script.** Cup points and auto-complete only fire when Knockout finishes a map and emits `KOMatchStandings`. That requires the repo’s `Modes/Trackmania/Knockout.Script.txt` on the dedicated server (not only `apps/knockout/`). An old mode script can loop rounds forever so maps never score — or, worse, play a flawless knockout while sending no callbacks at all (mode scripts before 2026-08-02 routed `KO*` through the legacy XmlRpc lib, which the ModeBase2 chain never enables). If `//ko hud` shows every `KO*` count at 0, the mode script is stale.
 
 The cup auto-completes after every map in the playlist has been **recorded** (chat: `Cup … — map X / Y recorded`), announces the **winner** and top 3 in chat, opens standings for everyone online, and returns to TimeAttack. Points on the left HUD update after each recorded map — not mid-race.
 

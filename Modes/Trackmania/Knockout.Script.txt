@@ -22,10 +22,11 @@
 //     when the last player finishes or gives up (cap from S_WarmUpDuration:
 //     <0 no cap, >0 seconds, 0 auto); 0 rounds = none;
 //     matchmaking off via Match_Settings (MB_Settings_UseDefaultMatchmaking=False).
-//   * XmlRpc:: in this chain binds to Libs/Nadeo/XmlRpc2 (RegisterCallback /
-//     UnregisterCallback / PassOn exist there, but NOT SendCallbackArray /
-//     CallbackIsAllowed). We include Libs/Nadeo/TrackMania/XmlRpc.Script.txt as
-//     XmlRpcTM for the custom-callback sender; the engine registry is shared.
+//   * XmlRpc:: in this chain binds to Libs/Nadeo/XmlRpc2, which RENAMES the legacy
+//     senders: CallbackIsAllowed -> CanSendCallback, SendCallbackArray ->
+//     SendCallback. Send every KO* callback through those. Never mix in
+//     Libs/Nadeo/TrackMania/XmlRpc.Script.txt to recover the old names -- see the
+//     note above the includes; it compiles, runs, and drops every callback.
 //   * The legacy ST2:: scores-table column API is gone (that table is a compiled
 //     Hud module). The rich live HUD/overlays are rendered by the PyPlanet app;
 //     here we only drive Hud.ScoresTable.SetFooterText. Player/slot colors dropped.
@@ -51,22 +52,30 @@
 //   3. No double round-stop at the field-of-1 endgame (RoundsBase2's play loop
 //      also stops the round; ours calls MB_StopRound() when <=1 remain).
 //   4. All 8 KO* callbacks arrive in the PyPlanet log under
-//      S_UseLegacyXmlRpcCallbacks = 0 (PyPlanet forces this).
+//      S_UseLegacyXmlRpcCallbacks = 0 (PyPlanet forces this). THIS IS THE ONE THAT
+//      FAILED on 2026-08-02: nothing else in a live cup detects a dead callback
+//      path, because the mode plays and chats perfectly with PyPlanet deaf. Check
+//      it with //ko hud before trusting any other knockout test.
 
 #Extends "Modes/TrackMania/Base/RoundsBase2.Script.txt"
 
-#Const Version		"2026-06-17"
+#Const Version		"2026-08-02"
 #Const ScriptName	"Knockout.Script.txt"
 
 // Our own minimal message lib (no domino54).
 #Include "Libs/crew/Notify.Script.txt" as Notify
 #Include "TextLib" as TL
-// In the RoundsBase2 chain, ModeBase2 binds XmlRpc:: to Libs/Nadeo/XmlRpc2 — which
-// has RegisterCallback / UnregisterCallback / PassOn but NOT the SendCallbackArray /
-// CallbackIsAllowed helpers. Pull in the TrackMania XmlRpc lib under its own alias
-// for those two. The engine's XML-RPC callback registry is shared, so names declared
-// with XmlRpc::RegisterCallback are visible to XmlRpcTM::CallbackIsAllowed.
-#Include "Libs/Nadeo/TrackMania/XmlRpc.Script.txt" as XmlRpcTM
+// In the RoundsBase2 chain, ModeBase2 binds XmlRpc:: to Libs/Nadeo/XmlRpc2. The v2
+// lib RENAMES the legacy senders rather than dropping them:
+//   CallbackIsAllowed -> CanSendCallback,  SendCallbackArray -> SendCallback.
+// Do NOT reach for Libs/Nadeo/TrackMania/XmlRpc.Script.txt to get the old names
+// back. Its CallbackIsAllowed() gates on LibXmlRpc_UseLibXmlRpc, a variable owned
+// by the legacy XmlRpcCommon lib that NOTHING in the ModeBase2 chain ever sets --
+// so it reads False forever and every KO* callback is silently dropped. (The two
+// registries are separate too: S_UseLegacyXmlRpcCallbacks drives the engine's
+// EnableLegacyXmlRpcCallbacks property, not that lib variable.) The mode then plays
+// a perfect knockout while PyPlanet sees nothing at all: no standings, no rows, no
+// cup points, no error anywhere.
 
 // ---------------------------------- //
 // Settings
@@ -734,7 +743,9 @@ UIManager.UIAll.UISequence = CUIConfig::EUISequence::None;
 ***Match_EndMap***
 ***
 MB_SortScores(CTmMode::ETmScoreSortOrder::TotalPoints);
-XmlRpcTM::SendPlayersScores();
+// (No SendPlayersScores here: that is a legacy-lib sender with no v2 counterpart,
+// and no stock v2 mode calls one. Scores reach clients as "Trackmania.Scores" from
+// Libs/Nadeo/TrackMania/Scores.Script.txt, which the base already drives.)
 XmlRpc_KOMatchStandings();
 UpdatePlayerColors();
 RemoveDisconnected();
@@ -787,42 +798,42 @@ XmlRpc::UnregisterCallback("KOShieldUsed");
 // ---------------------------------- //
 
 Void XmlRpc_KOPlayerAdded(CTmPlayer _Player) {
-	if (!XmlRpcTM::CallbackIsAllowed("KOPlayerAdded")) return;
+	if (!XmlRpc::CanSendCallback("KOPlayerAdded")) return;
 	declare PlayerLogin = "Null";
 	if (_Player != Null) PlayerLogin = _Player.User.Login;
 	declare Data = [PlayerLogin];
-	XmlRpcTM::SendCallbackArray("KOPlayerAdded", Data);
+	XmlRpc::SendCallback("KOPlayerAdded", Data);
 }
 
 Void XmlRpc_KOPlayerRemoved(CTmPlayer _Player) {
-	if (!XmlRpcTM::CallbackIsAllowed("KOPlayerRemoved")) return;
+	if (!XmlRpc::CanSendCallback("KOPlayerRemoved")) return;
 	declare PlayerLogin = "Null";
 	if (_Player != Null) PlayerLogin = _Player.User.Login;
 	declare Data = [PlayerLogin];
-	XmlRpcTM::SendCallbackArray("KOPlayerRemoved", Data);
+	XmlRpc::SendCallback("KOPlayerRemoved", Data);
 }
 
 Void XmlRpc_KOSendWinner(CTmPlayer _Player) {
-	if (!XmlRpcTM::CallbackIsAllowed("KOSendWinner")) return;
+	if (!XmlRpc::CanSendCallback("KOSendWinner")) return;
 	declare PlayerLogin = "Null";
 	if (_Player != Null) PlayerLogin = _Player.User.Login;
 	declare Data = [PlayerLogin];
-	XmlRpcTM::SendCallbackArray("KOSendWinner", Data);
+	XmlRpc::SendCallback("KOSendWinner", Data);
 }
 
 /** Map-end standings: ["Login:Points", ...], Points = survival score. */
 Void XmlRpc_KOMatchStandings() {
-	if (!XmlRpcTM::CallbackIsAllowed("KOMatchStandings")) return;
+	if (!XmlRpc::CanSendCallback("KOMatchStandings")) return;
 	declare Text[] Data;
 	foreach (Score in Scores) {
 		if (Score.User != Null) Data.add(Score.User.Login ^ ":" ^ Score.Points);
 	}
-	XmlRpcTM::SendCallbackArray("KOMatchStandings", Data);
+	XmlRpc::SendCallback("KOMatchStandings", Data);
 }
 
 /** Live running order, throttled to fire only when it actually changes. */
 Void XmlRpc_KORoundOrder() {
-	if (!XmlRpcTM::CallbackIsAllowed("KORoundOrder")) return;
+	if (!XmlRpc::CanSendCallback("KORoundOrder")) return;
 
 	declare Text[] Data;
 	declare Text Sig = "";
@@ -850,29 +861,29 @@ Void XmlRpc_KORoundOrder() {
 	// Skip the send when nothing relevant changed since last time.
 	if (Sig == G_PrevRoundOrderSig) return;
 	G_PrevRoundOrderSig = Sig;
-	XmlRpcTM::SendCallbackArray("KORoundOrder", Data);
+	XmlRpc::SendCallback("KORoundOrder", Data);
 }
 
 Void XmlRpc_KORoundStart(Integer _Round, Integer _Total) {
-	if (!XmlRpcTM::CallbackIsAllowed("KORoundStart")) return;
+	if (!XmlRpc::CanSendCallback("KORoundStart")) return;
 	declare Data = [_Round ^ ":" ^ _Total];
-	XmlRpcTM::SendCallbackArray("KORoundStart", Data);
+	XmlRpc::SendCallback("KORoundStart", Data);
 }
 
 Void XmlRpc_KOShieldAwarded(CTmPlayer _Player) {
-	if (!XmlRpcTM::CallbackIsAllowed("KOShieldAwarded")) return;
+	if (!XmlRpc::CanSendCallback("KOShieldAwarded")) return;
 	declare PlayerLogin = "Null";
 	if (_Player != Null) PlayerLogin = _Player.User.Login;
 	declare Data = [PlayerLogin];
-	XmlRpcTM::SendCallbackArray("KOShieldAwarded", Data);
+	XmlRpc::SendCallback("KOShieldAwarded", Data);
 }
 
 Void XmlRpc_KOShieldUsed(CTmPlayer _Player) {
-	if (!XmlRpcTM::CallbackIsAllowed("KOShieldUsed")) return;
+	if (!XmlRpc::CanSendCallback("KOShieldUsed")) return;
 	declare PlayerLogin = "Null";
 	if (_Player != Null) PlayerLogin = _Player.User.Login;
 	declare Data = [PlayerLogin];
-	XmlRpcTM::SendCallbackArray("KOShieldUsed", Data);
+	XmlRpc::SendCallback("KOShieldUsed", Data);
 }
 
 // ---------------------------------- //

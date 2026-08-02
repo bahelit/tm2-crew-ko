@@ -110,7 +110,7 @@ Shields need the mode’s `KO_WarmUp` (tracks warm-up finish times). An old scri
 
 | Problem | Try |
 |---|---|
-| Cup title shows, no points / never ends | Check `//ko hud`. An *EMPTY standings* line means you are testing with <2 players and no knockout ever ran — use `//ko fake 3`. A *score-capture error* line means the database write failed. `KOMatchStandings=0` with no other line means the mode is not reporting at all — deploy the latest mode script. |
+| Cup title shows, no points / never ends | Check `//ko hud`. An *EMPTY standings* line means you are testing with <2 players and no knockout ever ran — use `//ko fake 3`. A *score-capture error* line means the database write failed. `KOMatchStandings=0` with **all** the other `KO*` counts also 0 means the mode is not reporting at all — the knockout plays and chats normally but PyPlanet never hears it. Deploy the latest mode script (mode scripts before 2026-08-02 sent every `KO*` callback through the legacy XmlRpc lib, which is permanently disabled in the ModeBase2 chain). |
 | HUD `CUP` column stuck on 0 | Normal until a map is **recorded** — it refreshes on map start / map recorded, never mid-race. `//ko hud` prints `maps_played` and the points-cache size; `maps_played=0` means nothing has been recorded yet. |
 | KO stuck / infinite rounds | `//cup end` or `//botn end` (as appropriate). Deploy mode script with BestRace knockout fix. |
 | No left HUD | `//ko hud` — reads state and force-renders a test HUD. |

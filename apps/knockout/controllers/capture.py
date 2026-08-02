@@ -151,6 +151,34 @@ class CaptureController:
 		if start_time in self._captured:
 			return
 
+		# Recording is fire-and-forget from a mode callback, so an exception here used
+		# to reach the log and nowhere else: a whole cup could be raced with every map
+		# silently unscored (//cup results empty, the cup never auto-completing). Report
+		# it in chat and to //ko hud instead.
+		try:
+			await self._store_match(start_time, standings)
+			self._captured.add(start_time)
+			if hasattr(self.app, 'on_match_recorded'):
+				await self.app.on_match_recorded(start_time, standings)
+		except Exception as exc:
+			await self._report_capture_failure(start_time, exc)
+
+	async def _report_capture_failure(self, start_time, exc):
+		"""Surface a failed capture in game (chat + //ko hud) as well as the log."""
+		logger.exception('Knockout: failed to record match %s', start_time)
+		live = getattr(self.app, 'live', None)
+		if live is not None:
+			live.last_capture_error = '{}: {}'.format(type(exc).__name__, exc)
+		try:
+			await self.instance.chat(
+				'$f00>>> Knockout: could not save this map\'s scores — $fff{}$f00. '
+				'Run //ko hud; the server log has the detail.'.format(exc)
+			)
+		except Exception:
+			logger.exception('Knockout: could not announce the capture failure')
+
+	async def _store_match(self, start_time, standings):
+		"""Write the MatchInfo row plus one PlayerScore row per player."""
 		current = self.instance.map_manager.current_map
 		mode_script = None
 		try:
@@ -184,15 +212,10 @@ class CaptureController:
 				score2=0,
 			))
 
-		self._captured.add(start_time)
 		logger.info(
 			'Knockout: recorded %d standings for match %s on "%s"',
 			len(standings), start_time, current.name if current else '?',
 		)
-
-		# Hand off to cup logic (no-op until a cup is active, Phase 3).
-		if hasattr(self.app, 'on_match_recorded'):
-			await self.app.on_match_recorded(start_time, standings)
 
 	def _arm_ta_handoff_if_needed(self):
 		"""Queue TimeAttack for the upcoming map rotation without yielding."""

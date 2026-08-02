@@ -49,6 +49,26 @@ def test_allocate_match_start_time_monotonic():
 	assert stamp > last
 
 
+def test_allocate_match_start_time_fits_a_32bit_column():
+	"""map_start_time is an IntegerField -> signed 32-bit INT on MySQL/Postgres.
+
+	Epoch milliseconds (~1.8e12) overflow it, so every INSERT raised and no map's
+	scores were ever stored: the cup showed no points and never auto-completed.
+	"""
+	stamp = match_ids.allocate_match_start_time(0)
+	assert stamp <= match_ids.C_MaxMatchId
+	# ...and it is a real timestamp, not a truncated one: seconds since the epoch.
+	assert stamp > 1_700_000_000
+
+
+def test_allocate_match_start_time_bumps_within_the_same_second():
+	"""Two maps starting in the same second still get distinct, ordered ids."""
+	first = match_ids.allocate_match_start_time(0)
+	second = match_ids.allocate_match_start_time(first)
+	assert second == first + 1
+	assert second <= match_ids.C_MaxMatchId
+
+
 def test_dequeue_prefers_queued_id():
 	queue = deque([42, 99])
 	stamp = match_ids.dequeue_match_start_time(queue, 100)

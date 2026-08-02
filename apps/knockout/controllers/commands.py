@@ -521,6 +521,17 @@ class CupCommands:
 				'$f00>>> Last real HUD refresh error: $fff{}$f00 (this is why it is blank).'.format(last_err),
 				player,
 			)
+		# Scoring lives on a different path than the HUD: KOMatchStandings can arrive
+		# and still score nothing if the database write fails. Report that here too,
+		# since the symptom (empty /cup results, cup never completing) looks identical
+		# to the mode never sending the callback.
+		capture_err = getattr(live, 'last_capture_error', None)
+		if capture_err:
+			await self.instance.chat(
+				'$f00>>> Last score-capture error: $fff{}$f00 — maps are NOT being '
+				'recorded (see server log).'.format(capture_err),
+				player,
+			)
 		hud = getattr(app, 'hud', None)
 		if hud is None:
 			await self.instance.chat('$f00>>> No HUD view (plugin not fully started?).', player)

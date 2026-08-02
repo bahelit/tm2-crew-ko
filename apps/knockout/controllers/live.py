@@ -101,6 +101,10 @@ class LiveController:
 			'KORoundOrder': 0, 'KORoundStart': 0, 'KOMatchStandings': 0,
 			'KOShieldAwarded': 0, 'KOShieldUsed': 0,
 		}
+		# Last exception raised while recording a finished map's scores (capture ->
+		# database), surfaced by //ko hud. Set by CaptureController; kept here so the
+		# one diagnostic command reports the whole scoring chain.
+		self.last_capture_error = None
 		# Last exception raised by the real HUD refresh path, surfaced by //ko hud.
 		# The test render (show_test) reports its own errors to chat, but the real
 		# refresh is fire-and-forget from callbacks, so we stash it here instead.

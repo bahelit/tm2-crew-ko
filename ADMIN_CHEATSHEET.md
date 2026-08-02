@@ -98,7 +98,7 @@ Shields need the mode’s `KO_WarmUp` (tracks warm-up finish times). An old scri
 
 | Problem | Try |
 |---|---|
-| Cup title shows, no points / never ends | Finish a full KO map (1 survivor). Check `//ko hud` for `KOMatchStandings`. Deploy latest mode script. |
+| Cup title shows, no points / never ends | Finish a full KO map (1 survivor). Check `//ko hud`: `KOMatchStandings` ≥ 1 means the mode reported, a *score-capture error* line means the database write failed (nothing is being recorded). Deploy latest mode script + app. |
 | KO stuck / infinite rounds | `//cup end` or `//botn end` (as appropriate). Deploy mode script with BestRace knockout fix. |
 | No left HUD | `//ko hud` — reads state and force-renders a test HUD. |
 | No bottom splits feed | `//ko splits` — waypoint/finish signal counts, last payload, round gate, force-renders a test panel. |

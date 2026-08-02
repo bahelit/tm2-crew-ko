@@ -54,6 +54,8 @@ A plain `//cup on` with no preset defaults to open-ended. Use a preset or `//cup
 
 **Smoke test:** `//cup on quick` or `//cup on friday` then `//cup mapcount 1`, finish one knockout map, confirm chat `map 1 / 1 recorded` and `//cup results` has points. `//ko hud` should show `KOMatchStandings` ≥ 1 after a finished map.
 
+If a map's scores cannot be written to the database, the app now says so in chat and `//ko hud` reports the last score-capture error — `KOMatchStandings` arriving is not by itself proof a map was recorded.
+
 During cups and BOTN the player HUD package is always on (no admin toggles needed): left-side match board (practice times / warm-up, then live knockout order with cup points), bottom checkpoint **splits during scored KO rounds** (not during warm-up), and the finish countdown.
 
 **Stream box:** the ticker + elimination lower-third go to **pure spectators automatically** (your dedicated spectator capture client). During warm-up the ticker shows `PRACTICE`; during rounds it shows racing count / danger bubble. Racers do not see them. If the stream machine is not a pure spectator, run `/ko stream on` (or `/ko stream status` to check). Admins can push them to *everyone* with `show_overlays` in `//settings`.

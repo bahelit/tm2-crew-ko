@@ -5,7 +5,8 @@ from pyplanet.apps.core.trackmania import callbacks as tm_signals
 
 from ..models import MatchInfo
 from ..callbacks import parse_round_order, parse_round_start, first_login, register
-from ..hud_format import format_race_time, format_gap, split_cp_label, waypoint_cp_count
+from ..hud_format import (
+	format_race_time, format_gap, split_cp_label, waypoint_cp_count, describe_payload)
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,16 @@ class LiveController:
 		# crossings (ready-to-render row dicts). Both reset each round and map.
 		self.cp_best = {}
 		self.cp_feed = []
+		# Fallback checkpoint counter, login -> [crossings so far, last race_time].
+		# Used when the waypoint payload carries no usable ordinal (see _cp_ordinal).
+		self.cp_counts = {}
+		# Diagnostics for //ko splits: how many raw PyPlanet race signals arrived, a
+		# one-line summary of the last waypoint payload, and the last splits render
+		# error. The splits feed is fire-and-forget from callbacks, so without these
+		# a silent failure anywhere along the chain looks identical from in-game.
+		self.signals_seen = {'waypoint': 0, 'finish': 0}
+		self.last_waypoint_note = ''
+		self.last_splits_error = None
 		# Running cup total (login -> points so far in the active cup), shown as the
 		# HUD's points column. Cached because compute_standings sums every counted map
 		# and the HUD refreshes on every live event; only refreshed on the infrequent
@@ -156,6 +167,7 @@ class LiveController:
 		self.best_times = {}
 		self.cp_best = {}
 		self.cp_feed = []
+		self.cp_counts = {}
 		self.shield_holders = set()
 		# Only show the HUD while a Knockout mode is loaded.
 		self.is_knockout = await self._read_is_knockout()
@@ -247,6 +259,7 @@ class LiveController:
 		warm-up (and as a fallback before KORoundOrder carries them). Finish events
 		also feed the splits panel (PyPlanet does not emit waypoint on the finish
 		line — only the custom finish signal carries race_cps there)."""
+		self.signals_seen['finish'] = self.signals_seen.get('finish', 0) + 1
 		login = getattr(player, 'login', None) or (str(player) if player else '')
 		if not login:
 			return
@@ -273,8 +286,10 @@ class LiveController:
 		if self.round > 0 and self.phase in ('racing', 'showdown'):
 			count = waypoint_cp_count(race_cps=race_cps, **kwargs)
 			if count <= 0:
-				# Still show a FIN row even when CP list is empty.
-				count = max(self.cp_best.keys(), default=0) + 1
+				# Still show a FIN row even when the payload has no CP list: the
+				# player's own crossing count gives the finish its ordinal (their
+				# last checkpoint + 1), so finishers are compared against each other.
+				count = self._cp_ordinal(login, ms)
 			prev_best = self.cp_best.get(count)
 			if prev_best is None or ms <= prev_best:
 				self.cp_best[count] = ms
@@ -297,21 +312,31 @@ class LiveController:
 		checkpoint so far: the leading split shows as an absolute time, the rest as a
 		``+gap``. Only live rounds count, so warm-up driving never clutters the feed.
 
-		PyPlanet intermediate waypoints do not pass ``race_cps`` (only finish does
-		via the separate finish signal). Ordinal comes from ``waypoint_cp_count``.
+		The checkpoint ordinal comes from the payload when it carries one, and from
+		our own per-player counter when it does not (see ``_cp_ordinal``) -- payload
+		shapes vary between PyPlanet versions and an unknown ordinal used to drop the
+		crossing entirely, leaving the feed empty all round.
 		"""
-		if not (self.round > 0 and self.phase in ('racing', 'showdown')):
-			return
+		self.signals_seen['waypoint'] = self.signals_seen.get('waypoint', 0) + 1
+		live_round = self.round > 0 and self.phase in ('racing', 'showdown')
 		login = getattr(player, 'login', None) or (str(player) if player else '')
-		if not login:
-			return
 		try:
 			ms = int(race_time)
 		except (TypeError, ValueError):
+			ms = -1
+		payload_count = waypoint_cp_count(race_cps=race_cps, raw=raw, **kwargs)
+		# One-line record of what actually arrived, for //ko splits.
+		self.last_waypoint_note = 'ms={} cp={} race_cps={} raw={} extra={} live={}'.format(
+			ms, payload_count, describe_payload(race_cps), describe_payload(raw),
+			','.join(sorted(k for k in kwargs if k != 'signal')) or '-', live_round)
+		if not live_round or not login or ms < 0:
 			return
-		if ms < 0:
+		# The finish line belongs to on_finish (the finish signal is the one that
+		# always carries the final race time). Skipping it here keeps exactly one FIN
+		# row per lap even on setups where both signals fire for the last waypoint.
+		if is_end_race:
 			return
-		count = waypoint_cp_count(race_cps=race_cps, raw=raw, **kwargs)
+		count = payload_count if payload_count > 0 else self._cp_ordinal(login, ms)
 		if count <= 0:
 			return
 		prev_best = self.cp_best.get(count)
@@ -329,6 +354,17 @@ class LiveController:
 		))
 		del self.cp_feed[CP_FEED_MAX:]
 		await self._refresh_splits()
+
+	def _cp_ordinal(self, login, ms):
+		"""Checkpoint ordinal for a crossing whose payload carried none: how many
+		checkpoints this player has crossed so far in the current round. A race time
+		that did not advance means the player restarted, so the count starts over."""
+		count, last_ms = self.cp_counts.get(login, (0, -1))
+		if ms <= last_ms:
+			count = 0
+		count += 1
+		self.cp_counts[login] = (count, ms)
+		return count
 
 	async def on_roster_change(self, *args, **kwargs):
 		"""A player connected/disconnected; repaint the warm-up roster."""
@@ -418,6 +454,7 @@ class LiveController:
 		self._countdown_armed = False
 		self.cp_best = {}
 		self.cp_feed = []
+		self.cp_counts = {}
 		# Self-heal when the plugin missed KOPlayerAdded (reload mid-map, callback
 		# glitch, etc.): a real scored round means we are live. Without this, phase
 		# stays 'idle', the stream ticker shows "N ON SERVER" practice chrome under
@@ -568,7 +605,11 @@ class LiveController:
 				await view.refresh(self.cp_feed)
 			else:
 				await view.hide()
-		except Exception:
+			self.last_splits_error = None
+		except Exception as exc:
+			# Stashed for //ko splits: this path is fire-and-forget from race
+			# callbacks, so a render failure is otherwise invisible in-game.
+			self.last_splits_error = repr(exc)
 			logger.exception('Knockout: failed to refresh splits HUD')
 
 	async def _show_countdown(self):

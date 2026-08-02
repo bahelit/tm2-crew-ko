@@ -106,6 +106,20 @@ def waypoint_cp_count(race_cps=None, raw=None, **_kwargs):
 	return 0
 
 
+def describe_payload(value, max_keys=6):
+	"""Compact description of a callback payload field for the ``//ko splits``
+	diagnostic: a list becomes ``list[3]``, a dict its first few keys, anything else
+	its type name. Keeps a chat line readable while still showing what arrived."""
+	if isinstance(value, dict):
+		keys = sorted(value)[:max_keys]
+		return 'dict{{{}}}'.format(','.join(keys)) if keys else 'dict{}'
+	if isinstance(value, (list, tuple)):
+		return '{}[{}]'.format(type(value).__name__, len(value))
+	if value is None:
+		return 'None'
+	return type(value).__name__
+
+
 def row_color(danger, finished):
 	"""Text colour for a HUD row: red on the elimination bubble, green once the
 	player has safely finished, white otherwise."""

@@ -68,6 +68,8 @@ class CupCommands:
 				.add_param(name='note', required=False, nargs='*', help='Marker note.'),
 			Command(command='hud', namespace='ko', target=self.cmd_hud, admin=True,
 				description='Diagnostic: report match HUD state and force a test render.'),
+			Command(command='splits', namespace='ko', target=self.cmd_splits, admin=True,
+				description='Diagnostic: report the checkpoint splits feed and force a test render.'),
 			Command(command='stream', namespace='ko', target=self.cmd_stream, admin=False,
 				description='Toggle stream overlays (ticker + lower-third) for yourself. '
 					'Pure spectators already get them; use this on the dedicated stream box if needed.')
@@ -553,3 +555,62 @@ class CupCommands:
 		except Exception as e:
 			logger.exception('Knockout: //ko hud test render failed')
 			await self.instance.chat('$f00>>> Test HUD render FAILED: {} (see server log).'.format(e), player)
+
+	async def cmd_splits(self, player, data, **kwargs):
+		"""Diagnostic for the bottom checkpoint-splits feed.
+
+		The feed only paints while a scored round is live and at least one crossing
+		has been recorded, and it is driven entirely by PyPlanet race signals — so
+		when it stays blank the cause is one of: the signals never arrive, their
+		payload has no usable checkpoint ordinal, the round/phase gate is closed, or
+		the manialink itself does not render. This reports all four and then force-
+		renders the panel so the last one can be ruled out by eye."""
+		app = self.app
+		live = getattr(app, 'live', None)
+		view = getattr(app, 'splits', None)
+		if live is None or view is None:
+			await self.instance.chat('$f00>>> No splits view (plugin not fully started?).', player)
+			return
+
+		seen = getattr(live, 'signals_seen', {}) or {}
+		rnd = getattr(live, 'round', 0)
+		phase = getattr(live, 'phase', '?')
+		live_round = rnd > 0 and phase in ('racing', 'showdown')
+		try:
+			enabled = await live._match_hud_enabled()
+		except Exception as e:
+			enabled = 'err:{}'.format(e)
+		await self.instance.chat(
+			'$bbb>>> splits: signals waypoint=$fff{}$bbb finish=$fff{}$bbb | round=$fff{}$bbb '
+			'phase=$fff{}$bbb live_round=$fff{}$bbb hud_enabled=$fff{}$bbb feed=$fff{}$bbb rows'.format(
+				seen.get('waypoint', 0), seen.get('finish', 0), rnd, phase, live_round,
+				enabled, len(getattr(live, 'cp_feed', None) or ())),
+			player,
+		)
+		note = getattr(live, 'last_waypoint_note', '')
+		await self.instance.chat(
+			'$bbb>>> last waypoint: $fff{}'.format(note or '(none received)'), player)
+		if not seen.get('waypoint'):
+			await self.instance.chat(
+				'$ff0>>> No waypoint signals at all: the mode/server is not delivering '
+				'Trackmania.Event.WayPoint to PyPlanet (finish-only rows will still appear).',
+				player,
+			)
+		err = getattr(live, 'last_splits_error', None)
+		if err:
+			await self.instance.chat(
+				'$f00>>> Last splits render error: $fff{}$f00 (this is why it is blank).'.format(err),
+				player,
+			)
+
+		try:
+			await view.show_test(player=player)
+			await self.instance.chat(
+				'$bbb>>> Test splits panel rendered bottom centre-right (you only). If you do NOT '
+				'see it, the manialink/placement is the problem; if you do, the data path is.',
+				player,
+			)
+		except Exception as e:
+			logger.exception('Knockout: //ko splits test render failed')
+			await self.instance.chat(
+				'$f00>>> Test splits render FAILED: {} (see server log).'.format(e), player)

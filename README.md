@@ -108,6 +108,7 @@ KNOCKOUT_STARTUP_MODE = 'botn'   # 'knockout' | 'botn' | 'none'
 | `//botn end` | Fallback: force a stuck knockout to end (record result, return to practice) |
 | `//botn countdown <seconds>` | Handoff countdown (e.g. `30` for testing) |
 | `//ko hud` | HUD diagnostic |
+| `//ko splits` | Splits-feed diagnostic |
 
 ### Public (`/`)
 

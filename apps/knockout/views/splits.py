@@ -46,3 +46,21 @@ class SplitsHud(TemplateView):
 			await self.hide()
 			return
 		await self.display()
+
+	async def show_test(self, player=None):
+		"""Force-render the feed with placeholder rows, ignoring match state. Used by
+		the //ko splits diagnostic to prove the panel renders where it is expected.
+		Shown only to ``player`` when given, otherwise to everyone."""
+		feed = [
+			dict(name='Test A', cp='CP 1', split='12.470', color='66FF66'),
+			dict(name='Test B', cp='CP 1', split='+0.031', color='66FF66'),
+			dict(name='Test C', cp='FIN', split='+0.250', color='66FF66'),
+		]
+		self.rows = [
+			dict(entry, y=ml_num(FIRST_Y - index * ROW_H))
+			for index, entry in enumerate(feed)
+		]
+		if player is not None:
+			await self.display(player=player)
+		else:
+			await self.display()

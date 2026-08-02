@@ -70,6 +70,7 @@ BOTN runs **without shields**. One map per night over the weekly playlist.
 | Command | What it does |
 |---|---|
 | `//ko hud` | Match HUD diagnostic: phase, callback counts, shields held, force-refresh + test render. |
+| `//ko splits` | Splits-feed diagnostic: waypoint/finish signal counts, last waypoint payload, round gate, test render. |
 | `//ko streamstart` | Mark t=0 for VOD highlight timestamps. |
 | `//ko mark [note…]` | Manual VOD highlight marker. |
 
@@ -100,6 +101,7 @@ Shields need the mode’s `KO_WarmUp` (tracks warm-up finish times). An old scri
 | Cup title shows, no points / never ends | Finish a full KO map (1 survivor). Check `//ko hud` for `KOMatchStandings`. Deploy latest mode script. |
 | KO stuck / infinite rounds | `//cup end` or `//botn end` (as appropriate). Deploy mode script with BestRace knockout fix. |
 | No left HUD | `//ko hud` — reads state and force-renders a test HUD. |
+| No bottom splits feed | `//ko splits` — waypoint/finish signal counts, last payload, round gate, force-renders a test panel. |
 | Stream box missing ticker | Pure spectators get it automatically; else `/ko stream on` on the stream client. |
 | Want mode without scoring | `//cup setup friday` instead of `//cup on friday`. |
 

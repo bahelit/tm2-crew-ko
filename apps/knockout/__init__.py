@@ -536,7 +536,13 @@ class KnockoutConfig(AppConfig):
 			except Exception:
 				return ''
 
-		async def _await_script(wanted, timeout=8.0, interval=0.25):
+		# 8s was too tight in practice: RestartMap still has to run out the current
+		# map's end-of-map sequence (score compute, ladder close, podium, unload)
+		# before the new script loads, which on a live server took ~11s. Timing out
+		# skips the post-load _apply(stage=False), so warm-up laps / shields /
+		# S_DebugBotsCount never reach the running mode and the admin gets a "did not
+		# load" warning about a script that loaded fine moments later.
+		async def _await_script(wanted, timeout=25.0, interval=0.25):
 			name = wanted.lower().rsplit('/', 1)[-1].split('.')[0]
 			deadline = _time.time() + timeout
 			while _time.time() < deadline:

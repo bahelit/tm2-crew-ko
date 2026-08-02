@@ -133,16 +133,6 @@ def test_is_practice_phase():
 	assert hud.is_practice_phase(False, True, botn_active=True, botn_phase='countdown') is True
 
 
-def test_ko_per_round_label():
-	# Double-knockout active and field still above the threshold.
-	assert hud.ko_per_round_label(8, 14) == '2 UNTIL 8 PLAYERS'
-	# At or below the threshold it drops to one.
-	assert hud.ko_per_round_label(8, 8) == '1'
-	assert hud.ko_per_round_label(8, 5) == '1'
-	# No double-knockout configured.
-	assert hud.ko_per_round_label(0, 14) == '1'
-
-
 def test_format_hud_name_shield_marker():
 	assert hud.format_hud_name('Alice', has_shield=False) == 'Alice'
 	assert hud.format_hud_name('Alice', has_shield=True) == 'Alice ✚'

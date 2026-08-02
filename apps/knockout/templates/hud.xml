@@ -7,7 +7,7 @@
 	<!-- body backing: sized in the view so it always covers stats + every player row -->
 	<quad pos="0. -{{ title_h }}." size="{{ bg_width }}. {{ body_height }}." halign="left" valign="top" z-index="-1" bgcolor="000000" opacity="0.8" />
 
-	<!-- header stats: MAP (cup only), ROUND, PLAYERS, KOS PER ROUND -->
+	<!-- header stats: MAP (cup, never BOTN), ROUND, PLAYERS -->
 	{% for stat in stats %}
 	<label pos="2. {{ stat.y }}." size="28. 3." halign="left" valign="top" z-index="1"
 		textsize="1" textfont="GameFontSemiBold" textcolor="FFFFFF" text="{{ stat.label }}" />

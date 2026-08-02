@@ -2,7 +2,7 @@ from pyplanet.views.template import TemplateView
 
 from ..hud_format import (
 	format_race_time, format_gap, format_hud_name, match_label, round_value,
-	ko_per_round_label, hud_applies, is_practice_phase, ml_num, cup_map_value,
+	hud_applies, is_practice_phase, ml_num, cup_map_value,
 )
 
 # Layout mirrors the BOTN countdown: a title tab (TITLE_H) then a body panel.
@@ -58,7 +58,6 @@ class MatchHud(TemplateView):
 		self.map_text = ''
 		self.show_map = False
 		self.players_count = 0
-		self.ko_text = '1'
 		self.rows = []
 		self.has_divider = False
 		self.divider_y = 0.0
@@ -69,7 +68,6 @@ class MatchHud(TemplateView):
 		data = await super().get_context_data()
 		data['match_text'] = self.match_text
 		data['players_count'] = self.players_count
-		data['ko_text'] = self.ko_text
 		data['rows'] = self.rows
 		data['has_divider'] = self.has_divider
 		data['divider_y'] = ml_num(self.divider_y)
@@ -136,9 +134,11 @@ class MatchHud(TemplateView):
 			self.round_text = 'PRACTICE'
 		else:
 			self.round_text = round_value(getattr(live, 'round', 0), getattr(live, 'total_rounds', 0))
-		# MAP line: which map of the cup is being played. Only while a cup runs --
-		# a standalone knockout is a single map and the line would say "1".
-		self.show_map = bool(cup_active)
+		# MAP line: which map of the cup is being played. Only while a cup runs -- a
+		# standalone knockout is a single map and the line would say "1" -- and never
+		# during a BOTN, which plays one map a night: "MAP 1 of 3" there counts nights,
+		# not anything happening on screen tonight.
+		self.show_map = bool(cup_active) and not getattr(live, 'is_botn', False)
 		self.map_text = cup_map_value(
 			getattr(live, 'cup_maps_played', 0), getattr(live, 'cup_map_count', 0)
 		) if self.show_map else ''
@@ -170,10 +170,6 @@ class MatchHud(TemplateView):
 				entries.append((login, live.best_time(login), False))
 
 		self.players_count = len(entries)
-		if practice:
-			self.ko_text = '—'
-		else:
-			self.ko_text = ko_per_round_label(getattr(live, '_double_until', 0), len(entries))
 
 		# Baseline for gap times: the fastest valid time on the board.
 		leader_ms = None
@@ -220,13 +216,15 @@ class MatchHud(TemplateView):
 
 	def _stats(self):
 		"""The header stat lines, top to bottom, as (label, value) pairs. MAP joins
-		them while a cup is running so the field can see how far along it is."""
+		them while a (non-BOTN) cup is running so the field can see how far along it
+		is. The mode announces the double-knockout threshold in chat, so the board
+		stays short: three lines at most, which also keeps it clear of PyPlanet's own
+		left-hand widgets during the TimeAttack phases."""
 		stats = []
 		if self.show_map:
 			stats.append(('MAP', self.map_text))
 		stats.append(('ROUND', self.round_text))
 		stats.append(('PLAYERS', self.players_count))
-		stats.append(('KOS PER ROUND', self.ko_text))
 		return stats
 
 	def _rows_start(self):
@@ -282,7 +280,6 @@ class MatchHud(TemplateView):
 		self.map_text = ''
 		self.show_map = False
 		self.players_count = 4
-		self.ko_text = '2 UNTIL 8 PLAYERS'
 		self.show_season = False
 		self.title_textsize = '2'
 		self.rows = [

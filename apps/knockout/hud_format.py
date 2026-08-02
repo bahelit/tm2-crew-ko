@@ -214,24 +214,6 @@ def is_practice_phase(is_knockout, cup_active, botn_active=False, botn_phase='id
 	return bool(cup_active)
 
 
-def ko_per_round_label(double_until, players):
-	"""Right-hand value for the HUD's ``KOS PER ROUND`` line. With double-knockout
-	configured (``double_until`` > 0) and more than that many players still in, the
-	mode knocks out two each round until the field shrinks to ``double_until``; at
-	or below that threshold it is one."""
-	try:
-		double_until = int(double_until)
-	except (TypeError, ValueError):
-		double_until = 0
-	try:
-		players = int(players)
-	except (TypeError, ValueError):
-		players = 0
-	if double_until and players > double_until:
-		return '2 UNTIL {} PLAYERS'.format(double_until)
-	return '1'
-
-
 # Font-safe shield marker (U+271A). The shield emoji does not render in ManiaPlanet.
 SHIELD_MARK = '✚'
 

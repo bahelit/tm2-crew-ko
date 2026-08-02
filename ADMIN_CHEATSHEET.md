@@ -71,8 +71,20 @@ BOTN runs **without shields**. One map per night over the weekly playlist.
 |---|---|
 | `//ko hud` | Match HUD diagnostic: phase, callback counts, shields held, force-refresh + test render. |
 | `//ko splits` | Splits-feed diagnostic: waypoint/finish signal counts, last waypoint payload, round gate, test render. |
+| `//ko fake <n\|off>` | Testing: connect *n* fake players (or drop them all). |
+| `//ko simulate [maps] [players]` | Testing: record fabricated maps through the real scoring path. |
 | `//ko streamstart` | Mark t=0 for VOD highlight timestamps. |
 | `//ko mark [note…]` | Manual VOD highlight marker. |
+
+### Testing solo
+
+Two tools for when you are the only one on the server.
+
+`//ko fake 6` connects six fake players via the dedicated server's own debug method. They fill slots and appear on the HUD, but **fake players never drive** — so all of them DNF, the mode knocks the whole field in one round, and you win. Good for player counts, HUD layout and a genuine end-to-end scoring run; useless for elimination order, warm-up early-end or shields, none of which can happen without real lap times. `//ko fake off` removes them.
+
+`//ko simulate 5` fabricates five knockout maps and pushes them through the same `record_match` path a finished map uses — database writes, cup point table, map counter, auto-complete, `/cup results`. No racing at all, so a full cup takes seconds. Field size defaults to 6 and puts connected players first; `//ko simulate 5 8` uses an 8-player field.
+
+**These write real rows.** Synthetic players get `*simbot1*`-style logins so simulated cups are obvious in `/cup results` — run them on a throwaway cup (`//cup on quick`), not the cup you mean to keep.
 
 ---
 

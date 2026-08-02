@@ -2,7 +2,7 @@ import logging
 
 from pyplanet.contrib.command import Command
 
-from .. import payouts
+from .. import payouts, simulate
 from ..botn import resolve_map_count
 
 logger = logging.getLogger(__name__)
@@ -70,6 +70,13 @@ class CupCommands:
 				description='Diagnostic: report match HUD state and force a test render.'),
 			Command(command='splits', namespace='ko', target=self.cmd_splits, admin=True,
 				description='Diagnostic: report the checkpoint splits feed and force a test render.'),
+			Command(command='fake', namespace='ko', target=self.cmd_fake, admin=True,
+				description='Testing: connect fake players to fill the server ("off" removes them).')
+				.add_param(name='count', required=True, help='How many fake players, or "off".'),
+			Command(command='simulate', namespace='ko', target=self.cmd_simulate, admin=True,
+				description='Testing: record fabricated knockout maps through the real scoring path.')
+				.add_param(name='maps', required=False, help='How many maps to fabricate (default 1).')
+				.add_param(name='players', required=False, help='Field size (default 6, connected players first).'),
 			Command(command='stream', namespace='ko', target=self.cmd_stream, admin=False,
 				description='Toggle stream overlays (ticker + lower-third) for yourself. '
 					'Pure spectators already get them; use this on the dedicated stream box if needed.')
@@ -625,3 +632,129 @@ class CupCommands:
 			logger.exception('Knockout: //ko splits test render failed')
 			await self.instance.chat(
 				'$f00>>> Test splits render FAILED: {} (see server log).'.format(e), player)
+
+	# -------------------------------------------------------------- solo testing
+
+	async def cmd_fake(self, player, data, **kwargs):
+		"""Connect (or drop) dedicated-server fake players so a solo admin has a field.
+
+		Uses the server's own debug methods: ``ConnectFakePlayer`` returns the new
+		login, and ``DisconnectFakePlayer '*'`` removes every one of them. Fake
+		players occupy slots and fire ``KOPlayerAdded``, but in TrackMania they never
+		drive — so they all DNF and the mode knocks the whole field in round one,
+		leaving the real player as the sole survivor. That is a one-round match, not
+		a realistic elimination ladder, but it does exercise the full
+		mode → KOMatchStandings → scoring chain with a proper player count.
+		"""
+		raw = str(getattr(data, 'count', '') or '').strip().lower()
+
+		if raw in ('off', 'none', 'clear', 'remove', '0'):
+			try:
+				await self.instance.gbx('DisconnectFakePlayer', '*')
+			except Exception as exc:
+				logger.exception('Knockout: DisconnectFakePlayer failed')
+				await self.instance.chat(
+					'$f00>>> Could not disconnect the fake players: $fff{}$f00.'.format(exc), player)
+				return
+			await self.instance.chat('$ff0>>> Disconnected all fake players.', player)
+			return
+
+		count, error = simulate.parse_count(raw, simulate.C_MaxFakePlayers)
+		if count is None:
+			await self.instance.chat(
+				'$f00>>> //ko fake: {}$f00. Usage: $fff//ko fake <n|off>$f00.'.format(error), player)
+			return
+
+		connected = 0
+		for _ in range(count):
+			try:
+				await self.instance.gbx('ConnectFakePlayer')
+			except Exception as exc:
+				logger.exception('Knockout: ConnectFakePlayer failed')
+				await self.instance.chat(
+					'$f00>>> ConnectFakePlayer failed after $fff{}$f00 connected: $fff{}$f00.'.format(
+						connected, exc),
+					player,
+				)
+				break
+			connected += 1
+
+		if not connected:
+			return
+		await self.instance.chat(
+			'$ff0>>> Connected $fff{}$ff0 fake player(s). They never drive, so every one DNFs and '
+			'a knockout map ends in a single round. $fff//ko fake off$ff0 removes them.'.format(connected),
+			player,
+		)
+
+	async def cmd_simulate(self, player, data, **kwargs):
+		"""Record fabricated knockout maps through the real scoring path.
+
+		Each simulated map goes through the same ``CaptureController.record_match``
+		call a finished map does: the MatchInfo/PlayerScore writes, the CupMatch
+		link, the running cup totals and the auto-complete check. That makes cup
+		scoring testable by one admin in seconds — which is exactly what the
+		``map_start_time`` overflow needed and never got, since every symptom of it
+		only appeared after a whole cup had been raced.
+
+		Rows are real. Synthetic players use ``*simbot1*``-style logins so a
+		simulated cup is obvious in ``/cup results``; run it on a throwaway cup
+		rather than the one you intend to keep.
+		"""
+		maps, error = simulate.parse_count(
+			getattr(data, 'maps', None), simulate.C_MaxSimMaps, default=1)
+		if maps is None:
+			await self.instance.chat(
+				'$f00>>> //ko simulate: {}$f00 (maps).'.format(error), player)
+			return
+		size, error = simulate.parse_count(
+			getattr(data, 'players', None), simulate.C_MaxFakePlayers,
+			default=simulate.C_DefaultSimPlayers)
+		if size is None:
+			await self.instance.chat(
+				'$f00>>> //ko simulate: {}$f00 (players).'.format(error), player)
+			return
+
+		capture = getattr(self.app, 'capture', None)
+		if capture is None:
+			await self.instance.chat(
+				'$f00>>> //ko simulate: the capture controller is not running.', player)
+			return
+
+		online = []
+		try:
+			online = [getattr(entry, 'login', None)
+				for entry in self.instance.player_manager.online]
+		except Exception:
+			logger.exception('Knockout: //ko simulate could not list online players')
+		roster = simulate.sim_roster([login for login in online if login], size)
+
+		# Clear the stored capture error first, so the report below reflects this run
+		# and not a failure left over from an earlier map.
+		live = getattr(self.app, 'live', None)
+		if live is not None:
+			live.last_capture_error = None
+
+		await self.instance.chat(
+			'$ff0>>> Simulating $fff{}$ff0 map(s) with a $fff{}$ff0-player field. '
+			'These write real rows.'.format(maps, len(roster)),
+			player,
+		)
+		for index in range(maps):
+			# Rotate the winner each map so cup points actually spread across the field.
+			standings = simulate.build_sim_standings(roster, rotation=index)
+			await capture.record_match(standings)
+
+		capture_error = getattr(live, 'last_capture_error', None) if live is not None else None
+		if capture_error:
+			await self.instance.chat(
+				'$f00>>> Simulation hit a score-capture error: $fff{}$f00 — scoring is still '
+				'broken (see server log).'.format(capture_error),
+				player,
+			)
+			return
+		await self.instance.chat(
+			'$0f0>>> Simulation complete — check $fff/cup results$0f0, $fff/cup matches$0f0 '
+			'and the map counter in $fff/cup status$0f0.',
+			player,
+		)

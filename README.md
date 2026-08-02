@@ -56,6 +56,8 @@ A plain `//cup on` with no preset defaults to open-ended. Use a preset or `//cup
 
 If a map's scores cannot be written to the database, the app now says so in chat and `//ko hud` reports the last score-capture error — `KOMatchStandings` arriving is not by itself proof a map was recorded.
 
+**Testing solo.** `//ko fake 6` connects six fake players through the dedicated server's own debug method so there is a field to knock out. They fill slots and show on the HUD but never drive, so all of them DNF and the map ends in one round — enough for player counts, HUD layout and a real end-to-end scoring run, not enough for elimination order, warm-up early-end or shields. `//ko fake off` clears them. `//ko simulate 5` skips racing entirely and pushes five fabricated maps through the same `record_match` path a finished map uses, exercising the database writes, cup points, map counter and auto-complete in seconds. Both write real rows, and simulated players use `*simbot1*`-style logins — run them against a throwaway cup.
+
 During cups and BOTN the player HUD package is always on (no admin toggles needed): left-side match board (practice times / warm-up, then live knockout order with cup points), bottom checkpoint **splits during scored KO rounds** (not during warm-up), and the finish countdown.
 
 **Stream box:** the ticker + elimination lower-third go to **pure spectators automatically** (your dedicated spectator capture client). During warm-up the ticker shows `PRACTICE`; during rounds it shows racing count / danger bubble. Racers do not see them. If the stream machine is not a pure spectator, run `/ko stream on` (or `/ko stream status` to check). Admins can push them to *everyone* with `show_overlays` in `//settings`.
@@ -111,6 +113,8 @@ KNOCKOUT_STARTUP_MODE = 'botn'   # 'knockout' | 'botn' | 'none'
 | `//botn countdown <seconds>` | Handoff countdown (e.g. `30` for testing) |
 | `//ko hud` | HUD diagnostic |
 | `//ko splits` | Splits-feed diagnostic |
+| `//ko fake <n\|off>` | Testing: connect *n* fake players, or drop them all |
+| `//ko simulate [maps] [players]` | Testing: record fabricated maps through the real scoring path |
 
 ### Public (`/`)
 

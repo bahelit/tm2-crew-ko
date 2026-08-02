@@ -15,9 +15,10 @@ during practice, then "STARTING IN" through the short handoff window before the
 knockout loads.
 
 BOTN re-creates TrackMania 2020's Cup of the Day: a plain knockout with **no shields**.
-Only the knockout warm-up length (``S_WarmUpNb``) is staged into the knockout settings at
-the cutoff (and shields are forced off); see ``Knockout.Script.txt``. The earned-shield
-feature stays available to the Friday knockout cup via its preset's ``S_EnableShields``.
+The whole knockout configuration is pushed at the cutoff (see BOTN_KNOCKOUT_SETTINGS)
+rather than inherited from whichever cup preset ran last; see ``Knockout.Script.txt``.
+The earned-shield feature stays available to the Friday knockout cup via its preset's
+``S_EnableShields``.
 """
 
 import asyncio
@@ -39,8 +40,61 @@ TIMEATTACK_SCRIPT = 'TimeAttack.Script.txt'
 # back to the pinned practice map. Resting S_TimeLimit is restored on //botn off.
 PRACTICE_TIMELIMIT = 0
 
+# Warm-up laps to fall back on when the ``botn_warmup_laps`` setting is unreadable.
+BOTN_DEFAULT_WARMUP_LAPS = 3
+
+# Per-round warm-up cap in seconds, matching the Friday cup preset. KO_WarmUp ends a
+# round as soon as every player has finished or given up, so this is only a backstop
+# for someone who does neither -- not the length of the round.
+BOTN_WARMUP_CAP = 120
+
+# The knockout configuration BOTN pushes at the practice -> knockout handoff.
+#
+# Mode script settings live in ONE server-side map keyed by setting NAME and outlive
+# the script that set them, so every value NOT listed here is whatever the last cup
+# preset happened to leave behind. That is not theoretical: the weekly cup's
+# knockout_rotate preset sets S_RoundsPerMap=1, which would stop tonight's knockout
+# dead after a single round. BOTN is TM2020's Cup of the Day -- a plain knockout with
+# no shields -- so these are the stock Knockout defaults plus the warm-up cap.
+#
+# Keep every key declared by Knockout.Script.txt: SetModeScriptSettings faults on the
+# whole batch if one name is unknown, which would drop the warm-up along with it.
+BOTN_KNOCKOUT_SETTINGS = {
+	'S_RoundsPerMap': 0,           # rounds until one player is left, not a fixed count
+	'S_PracticeRounds': 0,         # eliminations from round 1
+	'S_DoubleKnockUntil': 20,      # two out per round while more than 20 are racing
+	'S_FinishCountdown': 30,       # seconds the rest get after the first finisher
+	'S_ForceLapsNb': 0,
+	'S_WarmUpDuration': BOTN_WARMUP_CAP,
+	'S_EnableShields': False,      # Cup of the Day style; shields stay a Friday thing
+	'S_PreShieldLogins': '',
+}
+
 
 # --------------------------------------------------------------------- pure helpers
+
+
+def botn_knockout_settings(warmup_laps, fake_players=0):
+	"""Build the settings pushed when tonight's practice hands over to the knockout.
+
+	``warmup_laps`` comes from the live ``botn_warmup_laps`` setting; anything
+	unreadable (a blank/None setting value) falls back to BOTN_DEFAULT_WARMUP_LAPS,
+	while an explicit 0 is honoured as "no warm-up". ``fake_players`` carries a
+	pending ``//ko fake`` field into the load the way a cup's preset does --
+	``S_DebugBotsCount`` is Knockout-only, so it is added only when non-zero.
+	"""
+	settings = dict(BOTN_KNOCKOUT_SETTINGS)
+	try:
+		settings['S_WarmUpNb'] = max(0, int(warmup_laps))
+	except (TypeError, ValueError):
+		settings['S_WarmUpNb'] = BOTN_DEFAULT_WARMUP_LAPS
+	try:
+		bots = max(0, int(fake_players))
+	except (TypeError, ValueError):
+		bots = 0
+	if bots:
+		settings['S_DebugBotsCount'] = bots
+	return settings
 
 def parse_hhmm(text, default=(17, 0)):
 	"""Parse a ``"HH:MM"`` string into ``(hour, minute)``, falling back to ``default``
@@ -499,22 +553,21 @@ class BotnController:
 			return
 		# Practice is locked in at the cutoff; the countdown is just a heads-up before the
 		# knockout loads. BOTN re-creates TM2020's Cup of the Day: a plain knockout with no
-		# shields, so we only stage the warm-up laps (no S_EnableShields / pre-shield).
+		# shields.
 		self.phase = 'countdown'
 		fastest = pick_fastest(self.best)
 
-		# Stage the knockout warm-up so it is present when the mode's warm-up / StartKnockout
-		# runs after the script switch.
-		settings = {}
+		# Stage the whole knockout configuration -- not just the warm-up -- so the mode
+		# reads it when Match_StartMap / StartKnockout run after the script switch. A cup
+		# loads its preset the same way; anything left unset here would be inherited from
+		# whatever preset ran last. See BOTN_KNOCKOUT_SETTINGS.
 		try:
-			warmup = max(0, int(await self.app.setting_botn_warmup_laps.get_value() or 0))
-		except (TypeError, ValueError):
-			warmup = 3
-		settings['S_WarmUpNb'] = warmup
-		# Shields stay off for BOTN (Cup of the Day style); they remain available to the
-		# Friday knockout cup via its preset's S_EnableShields.
-		settings['S_EnableShields'] = False
-		settings['S_PreShieldLogins'] = ''
+			warmup = await self.app.setting_botn_warmup_laps.get_value()
+		except Exception:
+			logger.exception('Knockout: BOTN could not read the warm-up lap setting')
+			warmup = BOTN_DEFAULT_WARMUP_LAPS
+		settings = botn_knockout_settings(
+			warmup, fake_players=getattr(self.app, 'fake_players_wanted', 0))
 
 		fastest_txt = await self._name(fastest) if fastest else 'nobody'
 		try:
@@ -633,6 +686,9 @@ class BotnController:
 			await self.app.clear_knockout_warmup()
 			await self._load_script(TIMEATTACK_SCRIPT)
 			if await self._await_script(TIMEATTACK_SCRIPT):
+				# Practice tracks finishes (the fastest is announced at the cutoff), and
+				# a newly loaded script reports nothing until its callbacks are re-armed.
+				await self._enable_callbacks()
 				await self._apply_mode_settings(settings, stage=False)
 		else:
 			await self._apply_mode_settings(settings, stage=False)
@@ -736,13 +792,25 @@ class BotnController:
 		if settings:
 			await self._apply_mode_settings(settings, stage=True)
 		await self._load_script(KNOCKOUT_SCRIPT)
-		if settings and await self._await_script(KNOCKOUT_SCRIPT):
-			await self._apply_mode_settings(settings, stage=False)
+		if await self._await_script(KNOCKOUT_SCRIPT):
+			# A freshly loaded script comes up with its XmlRpc callback library disabled
+			# (see App.enable_script_callbacks). The app's map_start hook re-arms it too,
+			# but do it here as well so nothing the knockout reports on its first round
+			# can be lost to whichever of the two runs first.
+			await self._enable_callbacks()
+			if settings:
+				await self._apply_mode_settings(settings, stage=False)
 
-	async def _await_script(self, script, timeout=8.0, interval=0.25):
+	async def _await_script(self, script, timeout=25.0, interval=0.25):
 		"""Poll (bounded) until ``script`` is the running mode script. Returns True once it
 		matches, False on timeout -- so a stuck switch degrades to 'no re-apply' rather
-		than hanging the handoff."""
+		than hanging the handoff.
+
+		25s, matching App.apply_mode_preset: RestartMap first has to run out the current
+		map's end-of-map sequence (score compute, ladder close, podium, unload) before the
+		new script loads, which took ~11s on the live server. The old 8s timed out on a
+		script that loaded fine moments later, skipping the post-load push -- which is the
+		one that actually gets the warm-up laps (and the practice time limit) in place."""
 		name = script.lower().rsplit('/', 1)[-1].split('.')[0]   # e.g. 'knockout'
 		deadline = time.time() + timeout
 		while time.time() < deadline:
@@ -766,6 +834,17 @@ class BotnController:
 				return ''
 		except Exception:
 			return ''
+
+	async def _enable_callbacks(self):
+		"""Re-arm the mode script's XmlRpc callback library after a script load. Cheap and
+		idempotent; the app owns the call (and the explanation of why it is needed)."""
+		fn = getattr(self.app, 'enable_script_callbacks', None)
+		if fn is None:
+			return
+		try:
+			await fn()
+		except Exception:
+			logger.exception('Knockout: BOTN could not re-enable mode script callbacks')
 
 	async def _apply_mode_settings(self, settings, stage=True):
 		"""Push mode-script settings (knockout warm-up, TimeAttack time limit) either staged

@@ -170,6 +170,53 @@ def test_practice_timelimit_is_open_ended():
 	assert botn.PRACTICE_TIMELIMIT == 0
 
 
+# ------------------------------------------------------- botn_knockout_settings
+
+def test_botn_knockout_settings_uses_the_configured_warmup():
+	settings = botn.botn_knockout_settings(2)
+	assert settings['S_WarmUpNb'] == 2
+	# An explicit zero is a real choice (no warm-up), not a missing value.
+	assert botn.botn_knockout_settings(0)['S_WarmUpNb'] == 0
+
+
+def test_botn_knockout_settings_falls_back_on_an_unreadable_setting():
+	assert botn.botn_knockout_settings(None)['S_WarmUpNb'] == botn.BOTN_DEFAULT_WARMUP_LAPS
+	assert botn.botn_knockout_settings('')['S_WarmUpNb'] == botn.BOTN_DEFAULT_WARMUP_LAPS
+	assert botn.botn_knockout_settings(-4)['S_WarmUpNb'] == 0
+
+
+def test_botn_knockout_settings_pins_what_a_cup_preset_would_leave_behind():
+	# Mode settings persist server-wide by name, so BOTN must state its own values.
+	# S_RoundsPerMap is the dangerous one: the weekly cup preset sets 1, which would
+	# stop tonight's knockout after a single round.
+	settings = botn.botn_knockout_settings(3)
+	assert settings['S_RoundsPerMap'] == 0
+	assert settings['S_PracticeRounds'] == 0
+	assert settings['S_ForceLapsNb'] == 0
+	assert settings['S_FinishCountdown'] == 30
+	assert settings['S_DoubleKnockUntil'] == 20
+	# Warm-up rounds end when everyone is done; the cap is only a straggler backstop.
+	assert settings['S_WarmUpDuration'] == 120
+	# BOTN is Cup of the Day style: never any shields.
+	assert settings['S_EnableShields'] is False
+	assert settings['S_PreShieldLogins'] == ''
+
+
+def test_botn_knockout_settings_carries_a_pending_fake_field():
+	# S_DebugBotsCount is Knockout-only, so it is sent only when //ko fake asked for it
+	# -- SetModeScriptSettings faults on the whole batch over one unknown name.
+	assert 'S_DebugBotsCount' not in botn.botn_knockout_settings(3)
+	assert 'S_DebugBotsCount' not in botn.botn_knockout_settings(3, fake_players=0)
+	assert botn.botn_knockout_settings(3, fake_players=6)['S_DebugBotsCount'] == 6
+	assert 'S_DebugBotsCount' not in botn.botn_knockout_settings(3, fake_players=None)
+
+
+def test_botn_knockout_settings_does_not_mutate_the_template():
+	botn.botn_knockout_settings(9, fake_players=4)['S_RoundsPerMap'] = 99
+	assert botn.BOTN_KNOCKOUT_SETTINGS['S_RoundsPerMap'] == 0
+	assert 'S_WarmUpNb' not in botn.BOTN_KNOCKOUT_SETTINGS
+
+
 if __name__ == '__main__':
 	import sys
 	import traceback

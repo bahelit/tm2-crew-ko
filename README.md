@@ -68,7 +68,7 @@ During cups and BOTN the player HUD package is always on (no admin toggles neede
 
 **Stream box:** the ticker + elimination lower-third go to **pure spectators automatically** (your dedicated spectator capture client). During warm-up the ticker shows `PRACTICE`; during rounds it shows racing count / danger bubble. Racers do not see them. If the stream machine is not a pure spectator, run `/ko stream on` (or `/ko stream status` to check). Admins can push them to *everyone* with `show_overlays` in `//settings`.
 
-**Warm-up (Friday):** three practice rounds per map (`S_WarmUpNb=3`). A round ends as soon as **every player has finished their lap or given up** — `S_WarmUpDuration=120` is only a 2-minute cap for stragglers, not the round length. Deploy the mode script so warm-up rounds end early instead of running out the clock.
+**Warm-up (Friday and BOTN):** three practice rounds per map (`S_WarmUpNb=3`; BOTN reads `botn_warmup_laps`). A round ends as soon as **every player has finished their lap or given up** — `S_WarmUpDuration=120` is only a 2-minute cap for stragglers, not the round length. Deploy the mode script so warm-up rounds end early instead of running out the clock.
 
 Warm-up only applies to a knockout: the app zeroes `S_WarmUpNb` / `S_WarmUpDuration` whenever it hands the server back to TimeAttack (cup finished, `//cup off`, BOTN practice). Mode settings are stored server-wide by *name* and outlive the script that set them, so without that reset TimeAttack — which declares the same two settings and runs `MB_WarmUp()` with them — would open every idle map with the knockout's warm-up rounds.
 
@@ -83,6 +83,8 @@ A nightly event over a weekly playlist — **one map per night**, tracked as a w
 3. **Next night** — server advances to the next playlist map in TimeAttack and re-arms tomorrow's cutoff.
 
 After the last map, the weekly cup completes and a new one opens automatically.
+
+**BOTN sets its own knockout configuration** at the practice→knockout handoff — rounds per map, double-KO threshold, finish countdown, laps, warm-up laps (`botn_warmup_laps`) and the 2-minute warm-up cap — instead of inheriting whatever cup preset ran last. Mode settings are stored server-wide by *name*, so an un-set value is simply the previous event's: run `//cup on weekly` (whose preset sets `S_RoundsPerMap=1`) before a BOTN and the night's knockout would have ended after a single round. The left HUD shows which map of the week is being played (`MAP 3 of 5`), and `//ko fake` bots staged during practice are carried into the knockout load the same way a cup carries them.
 
 Set boot mode in `settings/base.py`:
 

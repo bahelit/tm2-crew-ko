@@ -101,6 +101,12 @@ class LiveController:
 			'KORoundOrder': 0, 'KORoundStart': 0, 'KOMatchStandings': 0,
 			'KOShieldAwarded': 0, 'KOShieldUsed': 0,
 		}
+		# Maps that ended with an EMPTY KOMatchStandings payload, i.e. the mode
+		# reported at map end but no knockout had been raced (it waits for
+		# C_RequiredPlayersNb players before starting the round loop, so racing alone
+		# rotates maps with nothing to score). Counted separately from the callback
+		# total because "sent, but empty" and "never sent" need opposite fixes.
+		self.empty_standings_seen = 0
 		# Last exception raised while recording a finished map's scores (capture ->
 		# database), surfaced by //ko hud. Set by CaptureController; kept here so the
 		# one diagnostic command reports the whole scoring chain.

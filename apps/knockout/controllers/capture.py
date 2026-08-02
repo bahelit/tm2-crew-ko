@@ -87,14 +87,25 @@ class CaptureController:
 		self._match_start_queue.append(match_id)
 
 	async def on_standings(self, standings=None, **kwargs):
-		if not standings:
-			logger.warning('Knockout: KOMatchStandings fired with no standings')
-			return
-		# Surface receipt in //ko hud so admins can confirm the scoring callback.
+		# Count receipt BEFORE the empty check. An empty payload still means the mode
+		# reported at map end; counting it afterwards left //ko hud showing
+		# KOMatchStandings=0, which reads as "the mode never sent anything" -- the exact
+		# opposite diagnosis from "the mode sent it but nobody was racing".
 		live = getattr(self.app, 'live', None)
 		if live is not None and getattr(live, 'callbacks_seen', None) is not None:
 			live.callbacks_seen['KOMatchStandings'] = (
 				live.callbacks_seen.get('KOMatchStandings', 0) + 1)
+
+		if not standings:
+			# The mode ends every map, but only fills standings once a knockout has
+			# actually been raced: it blocks in Rounds_WaitForPlayers until
+			# C_RequiredPlayersNb (2) players are present. Testing alone therefore
+			# rotates maps with nothing to score -- not an error, but otherwise
+			# invisible in game: no rows, no cup points, no chat, no capture error.
+			logger.warning('Knockout: KOMatchStandings fired with no standings')
+			if live is not None:
+				live.empty_standings_seen = getattr(live, 'empty_standings_seen', 0) + 1
+			return
 		await self.record_match(standings)
 
 	async def _salvage_unrecorded_match(self):

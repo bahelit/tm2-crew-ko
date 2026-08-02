@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from pyplanet.apps.config import AppConfig
@@ -29,6 +30,13 @@ logger = logging.getLogger(__name__)
 # both stage 3) carry straight into the idle server and every resting map opens
 # with a warm-up. These are TimeAttack's own declared defaults.
 TIMEATTACK_RESET_SETTINGS = {'S_WarmUpNb': 0, 'S_WarmUpDuration': 0}
+
+# Deferred startup-mode switch: how long to wait for PyPlanet's start_apps_after
+# signal, how long to wait when that signal could not be listened for at all, and how
+# long to settle before touching the mode. See _deferred_startup_mode.
+STARTUP_APPS_TIMEOUT = 60.0
+STARTUP_APPS_FALLBACK = 5.0
+STARTUP_SETTLE = 2.0
 
 
 class KnockoutConfig(AppConfig):
@@ -335,7 +343,54 @@ class KnockoutConfig(AppConfig):
 		# (knockout idle in TimeAttack, or an auto-started Bowl of the Night). Runs
 		# last so the cup/BOTN controllers have already resumed any live session,
 		# which this then leaves untouched.
-		await self._apply_startup_mode()
+		#
+		# NOT awaited here: PyPlanet's Apps.start() walks its app registry with
+		# `for label, app in self.apps.items(): await app.on_start()`. A mode change
+		# makes ModeManager call Apps.check(), which re-populates apps that support the
+		# new mode straight into that same OrderedDict (live_rankings does not support
+		# our Knockout mode, so a Knockout -> TimeAttack switch reloads it). Switching
+		# modes inline let that land while we were still awaiting inside on_start --
+		# "RuntimeError: OrderedDict mutated during iteration", which aborts the whole
+		# boot: no apps started, no HUD, no commands, and a traceback that names only
+		# PyPlanet. Returning first lets the iteration finish.
+		self._apps_started = asyncio.Event()
+		self._apps_started_signal = False
+		try:
+			from pyplanet.core import signals as core_signals
+			self.context.signals.listen(
+				core_signals.pyplanet_start_apps_after, self._on_apps_started)
+			self._apps_started_signal = True
+		except Exception:
+			# Older/newer builds may not expose it; the fallback wait covers us.
+			logger.exception('Knockout: could not listen for start_apps_after')
+		self._startup_task = asyncio.ensure_future(self._deferred_startup_mode())
+
+	async def _on_apps_started(self, *args, **kwargs):
+		"""PyPlanet has finished starting every app -- nothing is iterating the app
+		registry any more, so it is safe to change the mode script."""
+		self._apps_started.set()
+
+	async def _deferred_startup_mode(self):
+		"""Apply the configured startup mode once PyPlanet has finished booting.
+
+		Bounded either way: if the signal never arrives the server still lands in its
+		configured resting state, a few seconds late, rather than staying in whatever
+		mode it came up in.
+		"""
+		timeout = STARTUP_APPS_TIMEOUT if self._apps_started_signal else STARTUP_APPS_FALLBACK
+		try:
+			try:
+				await asyncio.wait_for(self._apps_started.wait(), timeout=timeout)
+			except asyncio.TimeoutError:
+				logger.warning(
+					'Knockout: PyPlanet did not report its apps started within %ss; '
+					'applying the startup mode anyway', timeout)
+			await asyncio.sleep(STARTUP_SETTLE)
+			await self._apply_startup_mode()
+		except asyncio.CancelledError:
+			raise
+		except Exception:
+			logger.exception('Knockout: could not apply the startup mode')
 
 	async def _apply_startup_mode(self):
 		"""Boot the server into its configured resting state.

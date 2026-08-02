@@ -249,7 +249,11 @@ class MatchHud(TemplateView):
 			dict(gap=False, danger=True, rank=4, name='Test D', time='+0.500', name_color=WHITE, time_color=RED),
 		]
 		self._layout(self.rows)
-		if player is not None:
-			await self.display(player=player)
+		# player_logins, not player: TemplateView.display swallows an unknown `player`
+		# kwarg and shows the manialink to everyone -- which made this "you only"
+		# diagnostic render on every client on the server.
+		login = getattr(player, 'login', None)
+		if login:
+			await self.display(player_logins=[login])
 		else:
 			await self.display()

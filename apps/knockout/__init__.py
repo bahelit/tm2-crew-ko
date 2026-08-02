@@ -504,22 +504,26 @@ class KnockoutConfig(AppConfig):
 		except Exception:
 			online = list(targets)
 
-		target_logins = {
-			getattr(player, 'login', None) for player in targets
-			if getattr(player, 'login', None)
-		}
-		for entry in online:
-			login = getattr(entry, 'login', None)
-			if not login:
-				continue
-			try:
-				if login in target_logins:
-					await view.display(player=entry)
-				else:
-					await view.hide(player=entry)
-			except Exception:
-				logger.exception(
-					'Knockout: failed to push stream view to %s', login)
+		# TemplateView takes ``player_logins`` -- a list of login STRINGS -- on both
+		# display() and hide(). Not ``player``: that is the ListView signature, and on
+		# a TemplateView it lands in display()'s **kwargs and is silently ignored (so
+		# the overlay goes to everyone), while hide() has no **kwargs at all and
+		# raises TypeError. One call each, rather than one per player.
+		def _logins(players):
+			return {str(login) for login in
+				(getattr(entry, 'login', None) for entry in players) if login}
+
+		target_logins = _logins(targets)
+		online_logins = _logins(online)
+		show = sorted(target_logins & online_logins)
+		hide = sorted(online_logins - target_logins)
+		try:
+			if show:
+				await view.display(player_logins=show)
+			if hide:
+				await view.hide(player_logins=hide)
+		except Exception:
+			logger.exception('Knockout: failed to push stream view')
 
 
 	async def apply_mode_preset(self, script=None, settings=None, restart=True):

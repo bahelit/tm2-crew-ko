@@ -60,7 +60,9 @@ class SplitsHud(TemplateView):
 			dict(entry, y=ml_num(FIRST_Y - index * ROW_H))
 			for index, entry in enumerate(feed)
 		]
-		if player is not None:
-			await self.display(player=player)
+		# player_logins, not player -- see MatchHud.show_test.
+		login = getattr(player, 'login', None)
+		if login:
+			await self.display(player_logins=[login])
 		else:
 			await self.display()

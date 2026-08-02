@@ -40,7 +40,11 @@ class BotnCountdown(TemplateView):
 		otherwise display to everyone currently connected."""
 		self.seconds = max(1, int(seconds or 0))
 		self.header = header or 'STARTING IN'
-		if player is not None:
-			await self.display(player=player)
+		# player_logins, not player: a `player` kwarg is swallowed by TemplateView and
+		# the countdown goes to everyone -- which would restart the running clock on
+		# every client each time one late joiner is caught up.
+		login = getattr(player, 'login', None)
+		if login:
+			await self.display(player_logins=[login])
 		else:
 			await self.display()

@@ -240,6 +240,13 @@ class KnockoutConfig(AppConfig):
 
 		self._match_winner = None
 
+		# Fake field requested by //ko fake, remembered so apply_mode_preset can put
+		# S_DebugBotsCount back when Knockout loads. The setting is Knockout-only, so
+		# //ko fake before //cup on cannot push it (the server idles in TimeAttack) --
+		# and the first Knockout Match_StartMap would then run
+		# Users_SetNbFakeUsers(0, 0) and wipe the bots just as the cup begins.
+		self.fake_players_wanted = 0
+
 		# Cup presets (names / mode presets / payouts). Prefer an explicit path from
 		# the PyPlanet settings file or //settings; otherwise use the bundled defaults
 		# that ship inside apps/knockout/ so a plain deploy gets friday/weekly/quick.
@@ -494,8 +501,15 @@ class KnockoutConfig(AppConfig):
 		import asyncio
 		import time as _time
 
-		settings = settings or {}
+		settings = dict(settings or {})
 		mm = self.instance.mode_manager
+
+		# Carry a //ko fake field into the Knockout load. Only when a Knockout script
+		# is actually being loaded: S_DebugBotsCount does not exist in TimeAttack, and
+		# SetModeScriptSettings faults on the whole batch if any key is unknown.
+		bots_wanted = int(getattr(self, 'fake_players_wanted', 0) or 0)
+		if bots_wanted and 'knockout' in (script or '').lower():
+			settings.setdefault('S_DebugBotsCount', bots_wanted)
 
 		async def _apply(stage):
 			if not settings:

@@ -80,7 +80,11 @@ BOTN runs **without shields**. One map per night over the weekly playlist.
 
 Two tools for when you are the only one on the server.
 
-`//ko fake 6` connects six fake players via the dedicated server's own debug method. They fill slots and appear on the HUD, but **fake players never drive** — so all of them DNF, the mode knocks the whole field in one round, and you win. Good for player counts, HUD layout and a genuine end-to-end scoring run; useless for elimination order, warm-up early-end or shields, none of which can happen without real lap times. `//ko fake off` removes them.
+**Racing alone scores nothing.** The mode waits for `C_RequiredPlayersNb` (2) players in `Rounds_WaitForPlayers` before it starts a knockout. Solo, warm-up runs and then the map just rotates: `KOMatchStandings` still fires but is **empty**, so no maps are recorded, no cup points appear, and there is no error to explain it. `//ko hud` now says so explicitly.
+
+`//ko fake 6` connects six fake players via the dedicated server's own debug method *and* sets `S_DebugBotsCount=6` so the mode re-creates them at every map start — both are needed, since `Match_StartMap` calls `Users_SetNbFakeUsers(S_DebugBotsCount, 0)` over the same pool and would otherwise wipe them on the next map. They fill slots and appear on the HUD, but **fake players never drive** — so all of them DNF, the mode knocks the whole field in one round, and you win. Good for player counts, HUD layout and a genuine end-to-end scoring run; useless for elimination order, warm-up early-end or shields, none of which can happen without real lap times. `//ko fake off` clears both.
+
+`S_DebugBotsCount` exists only in Knockout, and the server idles in TimeAttack between cups — so running `//ko fake` first cannot push it (the dedicated server rejects unknown settings). That case is handled: the count is remembered and applied automatically when the cup loads Knockout, and chat says so. Either order works.
 
 `//ko simulate 5` fabricates five knockout maps and pushes them through the same `record_match` path a finished map uses — database writes, cup point table, map counter, auto-complete, `/cup results`. No racing at all, so a full cup takes seconds. Field size defaults to 6 and puts connected players first; `//ko simulate 5 8` uses an 8-player field.
 
@@ -112,6 +116,7 @@ Shields need the mode’s `KO_WarmUp` (tracks warm-up finish times). An old scri
 |---|---|
 | Cup title shows, no points / never ends | Check `//ko hud`. An *EMPTY standings* line means you are testing with <2 players and no knockout ever ran — use `//ko fake 3`. A *score-capture error* line means the database write failed. `KOMatchStandings=0` with **all** the other `KO*` counts also 0 means the mode is not reporting at all — the knockout plays and chats normally but PyPlanet never hears it. Deploy the latest mode script (mode scripts before 2026-08-02 sent every `KO*` callback through the legacy XmlRpc lib, which is permanently disabled in the ModeBase2 chain). |
 | HUD `CUP` column stuck on 0 | Normal until a map is **recorded** — it refreshes on map start / map recorded, never mid-race. `//ko hud` prints `maps_played` and the points-cache size; `maps_played=0` means nothing has been recorded yet. |
+| `//ko fake` says Knockout is not loaded | Expected before `//cup on` — the idle mode is TimeAttack, which has no `S_DebugBotsCount`. The bots connect anyway and the count is applied when the cup starts. |
 | KO stuck / infinite rounds | `//cup end` or `//botn end` (as appropriate). Deploy mode script with BestRace knockout fix. |
 | No left HUD | `//ko hud` — reads state and force-renders a test HUD. |
 | No bottom splits feed | `//ko splits` — waypoint/finish signal counts, last payload, round gate, force-renders a test panel. |

@@ -515,12 +515,50 @@ class CupCommands:
 			player,
 		)
 		cup = getattr(getattr(app, 'cup', None), 'active_cup', None)
+		played = 0
 		if cup is not None:
-			played = getattr(getattr(app, 'cup', None), 'maps_played', 0)
+			played = int(getattr(getattr(app, 'cup', None), 'maps_played', 0) or 0)
 			target = getattr(cup, 'map_count', 0) or 0
 			await self.instance.chat(
 				'$bbb>>> cup maps_played=$fff{}$bbb map_count=$fff{}$bbb cup_active=$fff{}$bbb'.format(
 					played, target or 'open', getattr(live, 'cup_active', False)),
+				player,
+			)
+
+		# The HUD's CUP column reads live.season_points, which is rebuilt only on map
+		# start, match-recorded and cup start/stop -- never mid-race, because
+		# compute_standings re-sums every map in the cup. So a column of zeros is
+		# CORRECT until a map has been recorded, and only wrong once maps_played > 0.
+		# Report the cache directly: its size tells the two cases apart, and the
+		# admin's own entry catches a login mismatch between the mode's logins and
+		# the PlayerScore rows (which would show zeros with a non-empty cache).
+		season = getattr(live, 'season_points', None) or {}
+		await self.instance.chat(
+			'$bbb>>> cup points cache: $fff{}$bbb player(s), yours=$fff{}$bbb '
+			'(refreshed on map start / map recorded, not mid-race).'.format(
+				len(season), season.get(player.login, 0)),
+			player,
+		)
+		# A map can end with KOMatchStandings sent but EMPTY: the mode blocks in
+		# Rounds_WaitForPlayers until C_RequiredPlayersNb (2) players are present, so
+		# racing alone rotates maps without ever running a knockout. Nothing is
+		# recorded and nothing is broken, but the symptom -- no points, no "map X
+		# recorded", no capture error -- is identical to scoring being dead.
+		empty_seen = int(getattr(live, 'empty_standings_seen', 0) or 0)
+		if empty_seen:
+			await self.instance.chat(
+				'$fa0>>> $fff{}$fa0 map(s) ended with EMPTY standings: the mode reported, but '
+				'no knockout had been raced — it needs $fff2+$fa0 players. Nothing to score. '
+				'Fill the server with $fff//ko fake 3$fa0, or use $fff//ko simulate$fa0 to test '
+				'scoring without racing.'.format(empty_seen),
+				player,
+			)
+
+		if cup is not None and played > 0 and not season:
+			await self.instance.chat(
+				'$f00>>> Points cache is EMPTY but $fff{}$f00 map(s) are recorded — the CUP '
+				'column will read 0 for everyone. The cup-points refresh failed; see the '
+				'server log.'.format(played),
 				player,
 			)
 		if last_err:
@@ -635,20 +673,72 @@ class CupCommands:
 
 	# -------------------------------------------------------------- solo testing
 
-	async def cmd_fake(self, player, data, **kwargs):
-		"""Connect (or drop) dedicated-server fake players so a solo admin has a field.
+	async def _set_debug_bots(self, count):
+		"""Push S_DebugBotsCount onto the running mode.
 
-		Uses the server's own debug methods: ``ConnectFakePlayer`` returns the new
-		login, and ``DisconnectFakePlayer '*'`` removes every one of them. Fake
-		players occupy slots and fire ``KOPlayerAdded``, but in TrackMania they never
-		drive — so they all DNF and the mode knocks the whole field in round one,
-		leaving the real player as the sole survivor. That is a one-round match, not
-		a realistic elimination ladder, but it does exercise the full
-		mode → KOMatchStandings → scoring chain with a proper player count.
+		Returns None on success, or a short reason string. The mode re-applies this
+		at every ``Match_StartMap`` via ``Users_SetNbFakeUsers(S_DebugBotsCount, 0)``,
+		so it is what makes a fake field survive a map rotation.
+
+		``S_DebugBotsCount`` is declared by Knockout.Script.txt and by nothing else,
+		while the server idles in TimeAttack between cups -- and the dedicated server
+		faults the *entire* SetModeScriptSettings batch on one unknown key. So probe
+		the running mode first and report plainly, rather than raising, for the
+		ordinary case of running //ko fake before the cup has loaded Knockout.
+		"""
+		try:
+			settings = await self.instance.mode_manager.get_settings()
+		except Exception:
+			logger.exception('Knockout: could not read the running mode settings')
+			settings = None
+
+		if settings is not None and 'S_DebugBotsCount' not in settings:
+			script = ''
+			try:
+				script = (await self.instance.mode_manager.get_current_script()) or ''
+			except Exception:
+				pass
+			return 'the running mode ({}) has no S_DebugBotsCount; it is Knockout-only'.format(
+				script.rsplit('/', 1)[-1] or 'unknown')
+
+		try:
+			await self.instance.mode_manager.update_settings({'S_DebugBotsCount': int(count)})
+			return None
+		except Exception as exc:
+			logger.exception('Knockout: could not set S_DebugBotsCount to %s', count)
+			return '{}: {}'.format(type(exc).__name__, exc)
+
+	async def cmd_fake(self, player, data, **kwargs):
+		"""Connect (or drop) fake players so a solo admin has a field to knock out.
+
+		Without this, racing alone scores nothing: the mode blocks in
+		``Rounds_WaitForPlayers`` until ``C_RequiredPlayersNb`` (2) players are
+		present, so no knockout is ever raced and every map ends with an *empty*
+		KOMatchStandings — no rows, no cup points, and no error to explain it.
+
+		Two things have to happen together. ``ConnectFakePlayer`` fills the server
+		right now, and ``S_DebugBotsCount`` makes the mode re-create that many fake
+		users at each map start. Doing only the first would be undone on the very
+		next map: ``Match_StartMap`` calls ``Users_SetNbFakeUsers(S_DebugBotsCount, 0)``
+		over the same ``*fakeplayer*`` pool, which clears it while the setting is 0 —
+		so a multi-map cup would quietly drop back to a one-player server.
+
+		Fake players still never drive, so they all DNF and the mode knocks the whole
+		field in round one. That is a real end-to-end scoring run, not a realistic
+		elimination ladder.
 		"""
 		raw = str(getattr(data, 'count', '') or '').strip().lower()
 
 		if raw in ('off', 'none', 'clear', 'remove', '0'):
+			# Clear the setting first, so a map rotation cannot re-create the bots
+			# between the two calls. Forget the wanted count too, or the next Knockout
+			# load would helpfully bring them all back.
+			self.app.fake_players_wanted = 0
+			reason = await self._set_debug_bots(0)
+			if reason is not None and 'Knockout-only' not in reason:
+				await self.instance.chat(
+					'$f00>>> Could not clear S_DebugBotsCount: $fff{}$f00 — bots may come '
+					'back at the next map.'.format(reason), player)
 			try:
 				await self.instance.gbx('DisconnectFakePlayer', '*')
 			except Exception as exc:
@@ -664,6 +754,13 @@ class CupCommands:
 			await self.instance.chat(
 				'$f00>>> //ko fake: {}$f00. Usage: $fff//ko fake <n|off>$f00.'.format(error), player)
 			return
+
+		# Persist across map rotations first, then fill the current map immediately so
+		# the admin does not have to wait for the next one. Remember the count either
+		# way: if Knockout is not loaded yet the setting cannot be pushed now, and
+		# apply_mode_preset re-applies it when the cup loads the mode.
+		self.app.fake_players_wanted = count
+		set_error = await self._set_debug_bots(count)
 
 		connected = 0
 		for _ in range(count):
@@ -681,9 +778,32 @@ class CupCommands:
 
 		if not connected:
 			return
+
+		if set_error is not None and 'Knockout-only' in set_error:
+			# Expected when filling the server before //cup on: the idle mode is
+			# TimeAttack. The bots are connected and stay connected under TimeAttack
+			# (nothing there touches the fake-user pool); the remembered count is
+			# applied for us the moment the cup loads Knockout.
+			await self.instance.chat(
+				'$ff0>>> Connected $fff{}$ff0 fake player(s). Knockout is not loaded yet, so '
+				'$fffS_DebugBotsCount$ff0 was stored and will be applied when the cup starts '
+				'the mode — they survive into the cup. $fff//ko fake off$ff0 removes them.'.format(
+					connected),
+				player,
+			)
+			return
+		if set_error is not None:
+			await self.instance.chat(
+				'$fa0>>> Connected $fff{}$fa0 fake player(s), but S_DebugBotsCount could not be '
+				'set ($fff{}$fa0) — they will disappear at the next map.'.format(
+					connected, set_error),
+				player,
+			)
+			return
 		await self.instance.chat(
-			'$ff0>>> Connected $fff{}$ff0 fake player(s). They never drive, so every one DNFs and '
-			'a knockout map ends in a single round. $fff//ko fake off$ff0 removes them.'.format(connected),
+			'$ff0>>> Connected $fff{}$ff0 fake player(s) and set $fffS_DebugBotsCount={}$ff0 so they '
+			'persist across maps. They never drive, so every one DNFs and a knockout map ends in '
+			'a single round. $fff//ko fake off$ff0 removes them.'.format(connected, count),
 			player,
 		)
 

@@ -27,6 +27,10 @@
 //     SendCallback. Send every KO* callback through those. Never mix in
 //     Libs/Nadeo/TrackMania/XmlRpc.Script.txt to recover the old names -- see the
 //     note above the includes; it compiles, runs, and drops every callback.
+//     The v2 library also boots DISABLED and the v2 chain never enables it (the
+//     legacy TM ModeBase used to, from S_UseScriptCallbacks); only the controller
+//     can, once, at connect. We call XmlRpc::Enable() in Match_StartServer -- see
+//     the long note there. Registering callbacks is not enough on its own.
 //   * The legacy ST2:: scores-table column API is gone (that table is a compiled
 //     Hud module). The rich live HUD/overlays are rendered by the PyPlanet app;
 //     here we only drive Hud.ScoresTable.SetFooterText. Player/slot colors dropped.
@@ -53,13 +57,15 @@
 //      also stops the round; ours calls MB_StopRound() when <=1 remain).
 //   4. All 8 KO* callbacks arrive in the PyPlanet log under
 //      S_UseLegacyXmlRpcCallbacks = 0 (PyPlanet forces this). THIS IS THE ONE THAT
-//      FAILED on 2026-08-02: nothing else in a live cup detects a dead callback
-//      path, because the mode plays and chats perfectly with PyPlanet deaf. Check
-//      it with //ko hud before trusting any other knockout test.
+//      FAILED on 2026-08-02, twice, for two independent reasons: the senders used
+//      the legacy lib (fixed), and the v2 lib was never enabled for a script loaded
+//      after the controller connected (fixed). Nothing else in a live cup detects a
+//      dead callback path -- the mode plays and chats perfectly with PyPlanet deaf.
+//      Check //ko hud before trusting any other knockout test.
 
 #Extends "Modes/TrackMania/Base/RoundsBase2.Script.txt"
 
-#Const Version		"2026-08-02"
+#Const Version		"2026-08-02b"
 #Const ScriptName	"Knockout.Script.txt"
 
 // Our own minimal message lib (no domino54).
@@ -207,7 +213,23 @@ MB_LogVersion(ScriptName, Version);
 //   Integer   PrevPlayersCount     — previous players count
 
 // ---------------------------------- //
-// XmlRpc — register the KO* callback contract (ports verbatim from the old mode).
+// XmlRpc — turn the library on, THEN register the KO* callback contract.
+//
+// Libs/Nadeo/XmlRpc2 boots DISABLED (LibXmlRpc2Common_IsEnabled defaults False) and
+// CanSendCallback() gates every send on it. Nothing in the ModeBase2 chain enables
+// it: the only switch is the controller calling the XmlRpc.EnableCallbacks script
+// method. PyPlanet sends that exactly once, inside GbxRemote.connect(), against
+// whichever script happened to be running then -- and never again. So every mode
+// script loaded LATER (which is what //cup on and //botn do) starts up with the
+// whole library off, and both our KO* callbacks and Nadeo's stock ones are dropped
+// before they leave the server. The mode plays and chats a flawless knockout with
+// the controller completely deaf. Enable it ourselves so the mode does not depend
+// on when the controller connected. (The legacy TM ModeBase did exactly this via
+// S_UseScriptCallbacks; the v2 chain simply dropped the call and never replaced it.)
+// The PyPlanet app re-arms it after each script load too -- belt and braces, since
+// that side also covers the stock modes we do not own.
+if (!XmlRpc::IsEnabled()) XmlRpc::Enable();
+
 XmlRpc::RegisterCallback("KOPlayerAdded", """
 * Data : An array with the login of the player added to the match
 * Example : ["Login"]

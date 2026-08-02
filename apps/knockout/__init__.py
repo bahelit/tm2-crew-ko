@@ -225,6 +225,12 @@ class KnockoutConfig(AppConfig):
 		self._force_ta_cup_next_map = False
 		self.context.signals.listen(mp_signals.map.map_start, self._on_cup_map_start_handoff)
 
+		# Re-arm mode script callbacks on every map. The paths that switch scripts
+		# (BOTN's practice/knockout handoff, return_to_timeattack) fire RestartMap and
+		# move on without waiting, so they cannot re-arm the incoming script
+		# themselves. map_start is the first moment it is reliably running.
+		self.context.signals.listen(mp_signals.map.map_start, self._on_map_start_callbacks)
+
 		# PyPlanet's jinja loader caches its app->templates mapping once and never
 		# picks up apps loaded later via a mode change. BOTN switches modes, which
 		# reloads mode-gated contrib apps (e.g. live_rankings) after that cache is
@@ -398,6 +404,36 @@ class KnockoutConfig(AppConfig):
 		value = str(raw).strip()
 		return value or None
 
+	async def enable_script_callbacks(self):
+		"""Re-arm the mode script's XmlRpc callback library after a script change.
+
+		Libs/Nadeo/XmlRpc2 boots DISABLED and gates every callback on that flag; the
+		only switch is the XmlRpc.EnableCallbacks script method. PyPlanet sends it
+		exactly once, in GbxRemote.connect(), against whichever script was running
+		then -- see pyplanet/core/gbx/remote.py. Nothing re-sends it when the script
+		changes, so every mode we load here (//cup on, //botn, return_to_timeattack)
+		comes up with callbacks off and the controller goes deaf: no KO* standings,
+		no waypoints, no scores, and no error on either side.
+
+		Cheap and idempotent, so we just do it after every script load rather than
+		trying to detect the case. It must run once the new script is actually
+		LIVE -- called straight after RestartMap it would only re-arm the outgoing
+		one -- which is why the general net is the map_start hook below.
+
+		Returns True when the call went through.
+		"""
+		try:
+			await self.instance.gbx(
+				'TriggerModeScriptEventArray', 'XmlRpc.EnableCallbacks', ['true'])
+		except Exception:
+			logger.exception('Knockout: could not re-enable mode script callbacks')
+			return False
+		return True
+
+	async def _on_map_start_callbacks(self, *args, **kwargs):
+		"""Keep mode script callbacks armed across map and script changes."""
+		await self.enable_script_callbacks()
+
 	async def return_to_timeattack(self):
 		"""Drop the server back to its TimeAttack resting state (next-map switch +
 		RestartMap so it takes effect on the current map)."""
@@ -406,6 +442,9 @@ class KnockoutConfig(AppConfig):
 			await self.instance.gbx('RestartMap')
 		except Exception:
 			logger.exception('Knockout: failed to return to TimeAttack')
+		# No enable_script_callbacks() here: RestartMap has not brought the new script
+		# up yet, so the call would land on the outgoing one. The map_start hook
+		# re-arms the idle mode once it is actually running.
 
 	async def stream_overlay_targets(self):
 		"""Who should receive the stream-only ticker / lower-third.
@@ -564,8 +603,13 @@ class KnockoutConfig(AppConfig):
 				return False
 			if restart:
 				ok = await _await_script(script)
-				if ok and settings:
-					await _apply(stage=False)
+				if ok:
+					# Before the settings push: a freshly loaded script has XmlRpc
+					# callbacks off (see enable_script_callbacks), and everything the
+					# app does from here on assumes the mode can talk back.
+					await self.enable_script_callbacks()
+					if settings:
+						await _apply(stage=False)
 				return ok
 			# Queued only: settings stay staged for the next map.
 			return True

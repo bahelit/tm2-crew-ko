@@ -29,7 +29,16 @@ class FinishCountdown(TemplateView):
 		data['ms'] = secs * 1000
 		return data
 
-	async def start(self, seconds):
-		"""(Re)arm and display the countdown for ``seconds`` seconds."""
-		self.seconds = max(1, int(seconds or 0))
-		await self.display()
+	async def start(self, seconds, player_logins=None):
+		"""(Re)arm and display the countdown for ``seconds`` seconds.
+
+		With no ``player_logins`` the card goes to everyone -- players and
+		spectators alike. Pass a list of login strings (not player objects; see
+		MatchHud.show_test) to re-sync a single latecomer with the time left,
+		without resetting the client-side tick for everyone already watching.
+		"""
+		self.seconds = max(1, int(round(seconds or 0)))
+		if player_logins:
+			await self.display(player_logins=list(player_logins))
+		else:
+			await self.display()

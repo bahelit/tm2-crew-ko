@@ -1,4 +1,5 @@
 import logging
+import time
 
 from pyplanet.apps.core.maniaplanet import callbacks as mp_signals
 from pyplanet.apps.core.trackmania import callbacks as tm_signals
@@ -88,6 +89,9 @@ class LiveController:
 		# armed once per round on the first finish; this flag prevents re-arming.
 		self._finish_seconds = 0
 		self._countdown_armed = False
+		# Monotonic deadline of the countdown currently on screen, so a client that
+		# arrives mid-round can be handed the time that is actually left.
+		self._countdown_ends_at = 0.0
 		# Whether the current mode script is a Knockout mode. The HUD is always-on
 		# during Knockout but should not appear in other modes; default True so it
 		# shows until the first map_start tells us otherwise.
@@ -386,8 +390,18 @@ class LiveController:
 		return count
 
 	async def on_roster_change(self, *args, **kwargs):
-		"""A player connected/disconnected; repaint the warm-up roster."""
+		"""A player connected/disconnected or flipped spectator; repaint the warm-up
+		roster, and catch that client up on the round already in progress.
+
+		``_refresh_overlays`` re-pushes the match HUD, ticker and splits feed to
+		everyone, so those self-heal. The finish countdown does not: it is armed
+		once per round, so anyone arriving after the first finisher -- the stream
+		box reconnecting, or a player just knocked into spectator -- would sit
+		through the rest of the round with no card.
+		"""
 		await self._refresh_overlays()
+		player = kwargs.get('player') or (args[0] if args else None)
+		await self._resend_countdown(getattr(player, 'login', None))
 
 	def best_time(self, login):
 		"""Best lap (ms) recorded for ``login`` this map, or -1 if none yet."""
@@ -638,14 +652,37 @@ class LiveController:
 			return
 		try:
 			if await self._match_hud_enabled():
+				self._countdown_ends_at = time.monotonic() + self._finish_seconds
 				await view.start(self._finish_seconds)
 		except Exception:
 			logger.exception('Knockout: failed to show finish countdown')
+
+	async def _resend_countdown(self, login):
+		"""Hand a client that just arrived (or just dropped into spectator) the
+		countdown already running, with the seconds that are actually left.
+
+		The card ticks client-side from the value it was rendered with, so a plain
+		re-display would restart it at the full duration. It is only sent to that
+		one login: a global re-display would visibly reset the card for everyone,
+		and spectator flips fire on every elimination.
+		"""
+		view = getattr(self.app, 'finish_countdown', None)
+		if view is None or not login or not self._countdown_armed:
+			return
+		remaining = self._countdown_ends_at - time.monotonic()
+		if remaining < 1:
+			return
+		try:
+			if await self._match_hud_enabled():
+				await view.start(remaining, player_logins=[str(login)])
+		except Exception:
+			logger.exception('Knockout: failed to resend finish countdown')
 
 	async def _hide_countdown(self):
 		view = getattr(self.app, 'finish_countdown', None)
 		if view is None:
 			return
+		self._countdown_ends_at = 0.0
 		try:
 			await view.hide()
 		except Exception:

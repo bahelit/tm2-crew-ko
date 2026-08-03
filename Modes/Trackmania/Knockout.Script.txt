@@ -66,7 +66,7 @@
 
 #Extends "Modes/TrackMania/Base/RoundsBase2.Script.txt"
 
-#Const Version		"2026-08-02b"
+#Const Version		"2026-08-03a"
 #Const ScriptName	"Knockout.Script.txt"
 
 // Our own minimal message lib (no domino54).
@@ -115,6 +115,18 @@
 // Use the stock Rounds HUD so the scores table shows the survival-POINTS column
 // (the default HUD shows a race-time column instead). Loaded in Match_LoadHud.
 #Const C_HudModulePath "Nadeo/TrackMania/Rounds/Hud.Module.Gbx"
+
+// The in-race HUD pieces (race chrono, "spectating <name>" bar, checkpoint time,
+// time gap, countdown, laps, ...) are NOT engine overlays in this generation:
+// RoundsBase2's Match_StartServer calls UI::LoadModules([Chrono, SpectatorInfo,
+// ...]), and UI2's SetModuleVisibility() reacts to a *loaded* module by switching
+// the matching engine overlay OFF (UIManager.UIAll.OverlayHideChrono = True, and
+// so on) and handing rendering to the client-side ManiaApp — UI_Server::LoadModule
+// only sets a netwrite variable that ManiaApps/Nadeo/TrackMania/UI_Client reads.
+// Without a ClientManiaAppUrl there is no client app, so nothing draws them and
+// the bottom-centre chrono + spectated player's name simply vanish. Stock Rounds
+// pairs the same module list with this app; so do we. Set in Match_LoadHud.
+#Const C_ManiaAppUrl "file://Media/ManiaApps/Nadeo/TrackMania/Rounds/Rounds.Script.txt"
 
 #Const Description _("""$FFFIn $<$F00Knockout$> mode, slowest players are knocked out.
 
@@ -166,9 +178,12 @@ MB_Settings_UseDefaultHud = False;
 // ---------------------------------- //
 // Load the Rounds HUD module so the scores table shows survival points (the
 // default HUD shows a race-time column). Only runs because UseDefaultHud=False.
+// The client ManiaApp goes with it: it is what actually draws the UI2 modules the
+// base loads (chrono, spectator info, ...) — see C_ManiaAppUrl above.
 // ---------------------------------- //
 ***Match_LoadHud***
 ***
+ClientManiaAppUrl = C_ManiaAppUrl;
 Hud_Load(C_HudModulePath);
 MB_SortScores(CTmMode::ETmScoreSortOrder::TotalPoints);
 ***
@@ -277,9 +292,38 @@ XmlRpc::RegisterCallback("KOShieldUsed", """
 * Example : ["Login"]
 """);
 
-// Interface
-UI::UnloadModule("PrevBestTime");
+// Interface. This block stacks AFTER RoundsBase2's Match_StartServer, which is
+// where UI::LoadModules() loads the whole module set, so unloading here sticks.
+// Module ids are the UIModules:: constants ("TMUIModule_PrevBestTime", ...), NOT
+// the legacy bare names the old UI lib took -- UI2's UnloadModule looks the id up
+// in its loaded list, so a bare "PrevBestTime" silently does nothing.
+//
+// PrevBestTime: a knockout has no personal-best/rank to chase. Unloading it hands
+// the slot back to the engine overlay, hence the OverlayHide right after.
+UI::UnloadModule(UIModules::C_Module_PrevBestTime);
 UIManager.UIAll.OverlayHidePersonnalBestAndRank = True;
+
+// MapRanking (150.5,-28) and ViewersCount (157,-40) sit right under the PyPlanet
+// "FINISH NOW" card (x 118..158, y -32..-55, see templates/finish_countdown.xml).
+// The running order is already on our own match HUD, so drop both rather than
+// stack two HUDs in the same corner. Unloading MapRanking hands its slot back to
+// the engine's position overlay, so hide that too; ViewersCount has no engine
+// equivalent and simply goes away. (If you would rather keep either, swap the
+// unload for UI::SetModulePosition(<module>, <Vec3>) and move it clear instead.)
+UI::UnloadModule(UIModules::C_Module_MapRanking);
+UIManager.UIAll.OverlayHidePosition = True;
+UI::UnloadModule(UIModules::C_Module_ViewersCount);
+
+// TimeGap (48,-52 -> x 54.5..101.5, rows running down past y=-56) is the stock
+// checkpoint-ranking list; our SPLITS feed (templates/splits.xml, x 62..126 from
+// y=-56) is the same information with the knockout's per-CP best gap, and the two
+// land on top of each other. SmallScoresTable (-158.5,40) likewise sits on the
+// left-side match HUD (templates/hud.xml, x -159..-95 from y=33). Ours win; both
+// stock modules fall back to an engine overlay, so hide those as well.
+UI::UnloadModule(UIModules::C_Module_TimeGap);
+UIManager.UIAll.OverlayHideCheckPointList = True;
+UI::UnloadModule(UIModules::C_Module_SmallScoresTable);
+UIManager.UIAll.OverlayHideRoundScores = True;
 
 // Custom layer
 Layers::Create("Custom");

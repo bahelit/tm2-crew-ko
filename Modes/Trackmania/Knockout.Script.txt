@@ -19,7 +19,8 @@
 //     (injected by ModeTrackmania); spawning is the ---Rounds_CanSpawn--- override
 //     (survivors = IsRacing); "wait for >=2 players" is the Rounds_WaitForPlayers
 //     hook; KO_WarmUp(S_WarmUpNb, cap) = S_WarmUpNb warm-up rounds, each ending
-//     when the last player finishes or gives up (cap from S_WarmUpDuration:
+//     when the last player finishes (give-up respawns them at the start instead,
+//     so a warm-up lap can be redone; cap from S_WarmUpDuration:
 //     <0 no cap, >0 seconds, 0 auto); 0 rounds = none;
 //     matchmaking off via Match_Settings (MB_Settings_UseDefaultMatchmaking=False).
 //   * XmlRpc:: in this chain binds to Libs/Nadeo/XmlRpc2, which RENAMES the legacy
@@ -340,7 +341,10 @@ UIManager.UIAll.BigMessage = "";
 
 // Warm-up before the knockout begins.
 // S_WarmUpNb = number of warm-up rounds (0 skips; e.g. BOTN TA practice already served).
-// Every warm-up round ends as soon as the last player has finished or given up.
+// Every warm-up round ends as soon as the last player has finished. Give-up is a
+// restart here, not a withdrawal: the player respawns at the start and the round
+// waits for them (the lib's finish timeout after the first finisher, and the cap
+// below, both still apply).
 // S_WarmUpDuration (seconds) only caps how long a round may drag on:
 //   < 0  → no cap: the round runs until everyone is done (BOTN default)
 //   == 0 → cap derived from the author time
@@ -924,7 +928,11 @@ Void XmlRpc_KOShieldUsed(CTmPlayer _Player) {
     respawned) and ends the round on `PlayersRacing.count <= 0`. Passing a real
     time limit flips the lib into time-limited mode, which respawns everyone
     forever and disables that check -- that is why the Friday cup warm-up only
-    ended when the 2-minute clock expired. The cap is enforced here instead. */
+    ended when the 2-minute clock expired. The cap is enforced here instead.
+
+    Give-up is the one part of that parking we undo: a warm-up lap is practice, so
+    pressing give-up must put the player back on the start line, not sit them out
+    for the rest of the round. See the LibWU3_CanSpawn re-arm in the event loop. */
 Void KO_WarmUp(Integer _NbOfWarmUp, Integer _CapMillisec) {
 	if (_NbOfWarmUp <= 0) return;
 
@@ -955,6 +963,23 @@ Void KO_WarmUp(Integer _NbOfWarmUp, Integer _CapMillisec) {
 
 			foreach (Event in PendingEvents) {
 				declare Processed = Events::Valid(Event);
+				// Give-up during a warm-up lap = restart, not "I am done". The lib
+				// spawns each player once per round (StartRound sets LibWU3_CanSpawn
+				// False after spawning) and its own Yield() below answers GiveUp with
+				// TM::WaitRace, so without this the player is parked for the rest of
+				// the round -- the practice lap they wanted to redo is over for them.
+				// Re-arming the flag makes the lib's "spawn players joining during the
+				// warm up" block put them back on the start line on the next Yield.
+				// LibWU3_CanSpawn is `for Score` and already exists, so ASSIGN to it
+				// (the declare initializer is ignored) -- same idiom as Rounds_CanSpawn.
+				// The round can still not hang: the lib arms its finish timeout once
+				// anyone finishes, and RoundDeadline caps the round regardless.
+				if (Event.Type == CTmModeEvent::EType::GiveUp) {
+					if (Event.Player != Null && Event.Player.Score != Null) {
+						declare LibWU3_CanSpawn for Event.Player.Score = True;
+						LibWU3_CanSpawn = True;
+					}
+				}
 				// Record finish times only — WarmUp owns race lifecycle.
 				if (Event.Type == CTmModeEvent::EType::WayPoint && Event.IsEndRace) {
 					if (Event.Player != Null && Event.Player.User != Null && Event.Player.CurRace != Null) {

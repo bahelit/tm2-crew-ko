@@ -104,7 +104,7 @@ No admin command — driven by the mode when `S_EnableShields` is on (Friday pre
 | **Spend** | Only when that player would be eliminated (not DNF / give-up) |
 | **Effect** | Saves them only; does not knock the next player |
 | **HUD** | `✚` next to holders on the left match board |
-| **Warm-up** | Friday: **3 rounds** (`S_WarmUpNb=3`); each ends when everyone has finished or given up, capped at 2 min (`S_WarmUpDuration=120`). BOTN uses the same cap with `botn_warmup_laps` rounds |
+| **Warm-up** | Friday: **3 rounds** (`S_WarmUpNb=3`); each ends when everyone has finished, capped at 2 min (`S_WarmUpDuration=120`). BOTN uses the same cap with `botn_warmup_laps` rounds. Give-up respawns the player at the start (practice lap, not a withdrawal) — Friday and BOTN alike |
 | **Back to TA** | Warm-up settings are zeroed on every return to TimeAttack — mode settings persist by name, so otherwise the idle server keeps warming up |
 
 Deploy **both** `apps/knockout/` and `Modes/Trackmania/Knockout.Script.txt` or mode behavior (warm-up clock, shields, scoring callbacks) won’t match the app.

@@ -524,6 +524,19 @@ class CupCommands:
 					played, target or 'open', getattr(live, 'cup_active', False)),
 				player,
 			)
+			# maps_played counts CupMatch rows, so it is the number that decides when a
+			# fixed-length cup completes. If it runs ahead of the maps actually raced,
+			# the same map was stored twice -- $fff/cup matches$bbb names them.
+			capture = getattr(app, 'capture', None)
+			if capture is not None:
+				await self.instance.chat(
+					'$bbb>>> capture: stored=$fff{}$bbb this map=$fff{}$bbb '
+					'awaiting standings for=$fff{}$bbb'.format(
+						len(getattr(capture, '_captured', ()) or ()),
+						getattr(capture, '_current_id', None) or '—',
+						getattr(capture, '_prev_id', None) or '—'),
+					player,
+				)
 
 		# The HUD's CUP column reads live.season_points, which is rebuilt only on map
 		# start, match-recorded and cup start/stop -- never mid-race, because
@@ -863,7 +876,9 @@ class CupCommands:
 		for index in range(maps):
 			# Rotate the winner each map so cup points actually spread across the field.
 			standings = simulate.build_sim_standings(roster, rotation=index)
-			await capture.record_match(standings)
+			# new_map: there is no map_start between simulated maps, so capture has to
+			# be told each one is a fresh match rather than a repeat of the last.
+			await capture.record_match(standings, new_map=True)
 
 		capture_error = getattr(live, 'last_capture_error', None) if live is not None else None
 		if capture_error:

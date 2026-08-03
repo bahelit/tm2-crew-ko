@@ -1,10 +1,9 @@
 import asyncio
 import logging
-from collections import deque
 
 from pyplanet.apps.core.maniaplanet import callbacks as mp_signals
 
-from ..match_ids import allocate_match_start_time, dequeue_match_start_time
+from ..match_ids import allocate_match_start_time, pick_match_id
 from ..models import MatchInfo, PlayerScore
 from ..callbacks import parse_standings, register
 
@@ -36,20 +35,18 @@ def should_arm_cup_handoff(maps_played, map_count):
 	return played >= target - 1
 
 
-def orphan_match_id(queue, last_match_id, captured):
-	"""Return a match id that was allocated but never recorded, or None.
+def carry_over_match_id(current_id, was_knockout, captured):
+	"""The id to keep alive across a map rotation, or None.
 
-	Prefers the oldest queued id (FIFO standings), then the last allocated id.
+	Called at map_start for the map that has just *ended*. Its id is only worth
+	holding on to when a knockout was running on it (so the mode can still report
+	KOMatchStandings late) and nothing was stored under it yet. Anything else --
+	a TimeAttack map, a RestartMap from ``//cup off`` or a mode switch, a map that
+	already recorded -- is dropped rather than carried forward.
 	"""
-	captured = set(captured or ())
-	if queue:
-		candidate = queue[0]
-		if candidate not in captured:
-			return candidate
+	if not was_knockout or current_id is None:
 		return None
-	if last_match_id is not None and last_match_id not in captured:
-		return last_match_id
-	return None
+	return None if current_id in set(captured or ()) else current_id
 
 
 class CaptureController:
@@ -62,10 +59,12 @@ class CaptureController:
 	def __init__(self, app):
 		self.app = app
 		self.instance = app.instance
-		self._match_start_time = None
-		# One id per map_start, consumed FIFO by KOMatchStandings so a fast map
-		# rotation cannot overwrite the id before the previous map is recorded.
-		self._match_start_queue = deque()
+		# Id of the map being played, plus the previous map's id while that map is
+		# still waiting on standings (KOMatchStandings can land just after the
+		# rotation). At most those two: ids used to pile up in an unbounded FIFO
+		# queue, one per map_start, but only knockout maps ever consumed one.
+		self._current_id = None
+		self._prev_id = None
 		self._last_match_id = 0
 		self._standings_signal = None
 		self._captured = set()
@@ -78,13 +77,20 @@ class CaptureController:
 	async def on_map_start(self, *args, **kwargs):
 		# Capture registers map_start before LiveController, so live still holds the
 		# previous map's racing/eliminated state here. Salvage first, then allocate.
+		was_knockout = bool(getattr(getattr(self.app, 'live', None), 'is_knockout', False))
 		await self._salvage_unrecorded_match()
+
+		# Retire the map that just ended. Keeping its id around indefinitely is what
+		# made a fixed-length cup finish a map early: every map_start that never
+		# produced standings (a TimeAttack map, the RestartMap behind //cup off or a
+		# mode switch) left an id at the head of the old queue, and the next rotation
+		# "salvaged" it by recording the previous knockout map a second time.
+		self._prev_id = carry_over_match_id(self._current_id, was_knockout, self._captured)
 
 		# Allocate a stable identifier for the match that is about to be played.
 		match_id = allocate_match_start_time(self._last_match_id)
 		self._last_match_id = match_id
-		self._match_start_time = match_id
-		self._match_start_queue.append(match_id)
+		self._current_id = match_id
 
 	async def on_standings(self, standings=None, **kwargs):
 		# Count receipt BEFORE the empty check. An empty payload still means the mode
@@ -123,11 +129,10 @@ class CaptureController:
 		if live is None or not getattr(live, 'is_knockout', False):
 			return
 
-		# Prefer the oldest queued (not yet consumed) id; fall back to the last
-		# allocated id when the queue was already drained without a capture.
-		orphan_id = orphan_match_id(
-			self._match_start_queue, self._match_start_time, self._captured)
-		if orphan_id is None:
+		# The map that just ended still owns ``_current_id`` here -- the new one is
+		# allocated after this call. Nothing to salvage once it has recorded.
+		orphan_id = self._current_id
+		if orphan_id is None or orphan_id in self._captured:
 			return
 
 		standings = live.synth_standings()
@@ -139,11 +144,6 @@ class CaptureController:
 			)
 			return
 
-		# record_match dequeues FIFO; if the id only lived on ``_match_start_time``
-		# (queue already empty), put it back so scores land under the orphaned id.
-		if not self._match_start_queue or self._match_start_queue[0] != orphan_id:
-			self._match_start_queue.appendleft(orphan_id)
-
 		logger.warning(
 			'Knockout: map rotated without KOMatchStandings; salvaging %d live '
 			'standings for match %s',
@@ -151,16 +151,23 @@ class CaptureController:
 		)
 		await self.record_match(standings)
 
-	async def record_match(self, standings):
+	async def record_match(self, standings, new_map=False):
+		"""Store one map's standings. Returns True when they were written, False when
+		this map is already recorded (a repeat KOMatchStandings, or a salvage/force-record
+		for a map the mode has already reported).
+
+		``new_map`` is for ``//ko simulate``, which fabricates several maps back to back
+		without any map_start between them: each call really is a fresh match."""
+		start_time = self._take_match_id(new_map=new_map)
+		if start_time is None:
+			logger.info(
+				'Knockout: ignoring standings for a map that is already recorded '
+				'(current=%s prev=%s)', self._current_id, self._prev_id)
+			return False
+
 		# Arm the BOTN / cup TimeAttack handoff before the first await: the mode can
 		# advance to the next map (and fire map_start) while we yield on DB I/O.
 		self._arm_ta_handoff_if_needed()
-
-		start_time = dequeue_match_start_time(self._match_start_queue, self._last_match_id)
-		if start_time > self._last_match_id:
-			self._last_match_id = start_time
-		if start_time in self._captured:
-			return
 
 		# Recording is fire-and-forget from a mode callback, so an exception here used
 		# to reach the log and nowhere else: a whole cup could be raced with every map
@@ -173,6 +180,27 @@ class CaptureController:
 				await self.app.on_match_recorded(start_time, standings)
 		except Exception as exc:
 			await self._report_capture_failure(start_time, exc)
+		return True
+
+	def _take_match_id(self, new_map=False):
+		"""Claim the match id these standings belong to, or None when the map they
+		describe has already been recorded. Synchronous on purpose: ``record_match``
+		has to settle the id before its first await."""
+		if new_map:
+			self._prev_id = None
+			self._current_id = allocate_match_start_time(self._last_match_id)
+			self._last_match_id = self._current_id
+			return self._current_id
+		chosen = pick_match_id(self._current_id, self._prev_id, self._captured)
+		if chosen is None and self._current_id is None:
+			# No map_start seen yet (the app was loaded mid-map): mint an id so
+			# //cup end can still save the running map.
+			self._current_id = allocate_match_start_time(self._last_match_id)
+			self._last_match_id = self._current_id
+			chosen = self._current_id
+		if chosen is not None and chosen == self._prev_id:
+			self._prev_id = None
+		return chosen
 
 	async def _report_capture_failure(self, start_time, exc):
 		"""Surface a failed capture in game (chat + //ko hud) as well as the log."""

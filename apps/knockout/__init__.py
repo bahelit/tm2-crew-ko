@@ -807,8 +807,9 @@ class KnockoutConfig(AppConfig):
 			logger.info('Knockout: force-record (%s) found no live standings to save', reason)
 			return False
 		logger.info('Knockout: force-recording %d live standings (%s)', len(standings), reason)
-		await self.capture.record_match(standings)
-		return True
+		# False when the mode already reported this map: saying "saved" there would be
+		# a lie, and re-storing it would count as an extra cup map.
+		return bool(await self.capture.record_match(standings))
 
 	async def update_widget(self):
 		"""Refresh the live widget, or hide it when no cup is active / disabled."""

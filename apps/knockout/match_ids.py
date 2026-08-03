@@ -24,8 +24,21 @@ def allocate_match_start_time(last_id):
 	return max(stamp, (last_id or 0) + 1)
 
 
-def dequeue_match_start_time(queue, last_id):
-	"""Pop the oldest queued map-start id, or allocate a fresh one if the queue is empty."""
-	if queue:
-		return queue.popleft()
-	return allocate_match_start_time(last_id)
+def pick_match_id(current_id, prev_id, captured):
+	"""Which match id a set of standings belongs to, or None to drop them.
+
+	``current_id`` is the map being played; ``prev_id`` is the map that ended most
+	recently and still has no standings stored, so a KOMatchStandings arriving just
+	after the rotation belongs to it and wins.
+
+	Returns None when both are already in ``captured``: that is a repeat report for a
+	map that is already recorded. Storing it again used to be possible (a fresh id was
+	minted whenever nothing was queued), which linked an extra map to the active cup
+	and completed a fixed-length cup one map early.
+	"""
+	captured = set(captured or ())
+	if prev_id is not None and prev_id not in captured:
+		return prev_id
+	if current_id is not None and current_id not in captured:
+		return current_id
+	return None

@@ -134,7 +134,7 @@ Shields need the mode’s `KO_WarmUp` (tracks warm-up finish times). An old scri
 | Command | What it does |
 |---|---|
 | `/cup status` | Active cup progress |
-| `/cup results` | Standings (auto-opens for everyone on cup end; still works afterward) |
+| `/cup results` | Standings (auto-opens for everyone on cup end, then closes itself after `cup_results_autohide` seconds — default 60; still works afterward, and reopened by hand it stays until dismissed) |
 | `/cup matches` | Maps played |
 | `/cup season [key]` | Season leaderboard |
 | `/cup stats <login>` | Player cup history |

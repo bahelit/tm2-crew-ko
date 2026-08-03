@@ -203,6 +203,16 @@ class KnockoutConfig(AppConfig):
 				'Settable live with //botn countdown <seconds> (e.g. 30 for testing)',
 			default=900,
 		)
+		self.setting_cup_results_autohide = Setting(
+			'cup_results_autohide',
+			'Cup Results Auto-Hide Seconds',
+			Setting.CAT_BEHAVIOUR,
+			type=int,
+			description='Seconds the cup-end results window stays open before closing itself. '
+				'The server is already back in TimeAttack by then, so it otherwise sits over '
+				'the next map until every player dismisses it. 0 = leave it open; default 60',
+			default=60,
+		)
 		self.setting_botn_warmup_laps = Setting(
 			'botn_warmup_laps',
 			'BOTN Warm-up Laps',
@@ -234,6 +244,7 @@ class KnockoutConfig(AppConfig):
 			self.setting_botn_cutoff_time,
 			self.setting_botn_countdown_seconds,
 			self.setting_botn_warmup_laps,
+			self.setting_cup_results_autohide,
 		)
 
 	async def on_start(self):

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from .. import score_modes
@@ -12,9 +13,14 @@ logger = logging.getLogger(__name__)
 class ResultsController:
 	"""Sums per-map scores into overall cup standings and shows the results UI."""
 
+	# Fallback when the cup_results_autohide setting cannot be read.
+	AUTO_HIDE_DEFAULT = 60
+
 	def __init__(self, app):
 		self.app = app
 		self.instance = app.instance
+		# Closes the cup-end results window; see show_all.
+		self._auto_hide_task = None
 
 	async def compute_standings(self, cup):
 		"""
@@ -102,7 +108,12 @@ class ResultsController:
 		return export_mod.write_exports(cup, standings, directory or '')
 
 	async def show_all(self, cup):
-		"""Open cup standings for every online player (cup end ceremony)."""
+		"""Open cup standings for every online player (cup end ceremony).
+
+		The cup completing also drops the server back to TimeAttack, so this window
+		would otherwise sit over the next map until every player closed it by hand.
+		It closes itself after ``cup_results_autohide`` seconds; ``/cup results``
+		reopens it (its own view, which stays up until dismissed)."""
 		if cup is None:
 			return
 		standings = await self.compute_standings(cup)
@@ -122,6 +133,42 @@ class ResultsController:
 					'Knockout: failed to show cup results to %s',
 					getattr(entry, 'login', '?'),
 				)
+		await self._arm_auto_hide(view)
+
+	async def _arm_auto_hide(self, view):
+		"""Schedule the ceremony window to close itself, replacing any earlier one."""
+		try:
+			seconds = int(await self.app.setting_cup_results_autohide.get_value())
+		except Exception:
+			logger.exception('Knockout: could not read cup_results_autohide')
+			seconds = self.AUTO_HIDE_DEFAULT
+		self.cancel_auto_hide()
+		if seconds <= 0:
+			return
+		self._auto_hide_task = asyncio.ensure_future(self._auto_hide(view, seconds))
+
+	def cancel_auto_hide(self):
+		"""Stop a pending auto-close (a new cup ended, or the app is shutting down)."""
+		task = self._auto_hide_task
+		self._auto_hide_task = None
+		if task is not None and not task.done():
+			task.cancel()
+
+	async def _auto_hide(self, view, seconds):
+		try:
+			await asyncio.sleep(seconds)
+			# hide closes it on every client; destroy then unregisters the manialink and
+			# its action handlers, so a night of cups does not leave a view per cup
+			# registered with the UI manager.
+			await view.hide()
+			await view.destroy()
+		except asyncio.CancelledError:
+			raise
+		except Exception:
+			logger.exception('Knockout: could not auto-close the cup results window')
+		# _auto_hide_task is deliberately left pointing at this finished task: clearing
+		# it here would race with _arm_auto_hide, which cancels the old task and then
+		# stores the new one (this handler runs after that store).
 
 	async def announce_top(self, cup, count=3):
 		"""Announce the cup winner and podium in public chat (after cup complete)."""

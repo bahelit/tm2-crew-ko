@@ -150,6 +150,7 @@ Most options are changed live with `//settings` (no restart). Key ones:
 | `botn_cutoff_time` | `17:00` | When practice ends |
 | `botn_countdown_seconds` | `900` | Practice → knockout delay |
 | `botn_warmup_laps` | `3` | Warm-up laps before eliminations |
+| `cup_results_autohide` | `60` | Seconds the cup-end results window stays up (`0` = until dismissed) |
 | `show_match_hud` | on | Left-side match HUD |
 | `cup_presets_path` | blank | Override path; blank uses bundled `apps/knockout/presets.json` |
 

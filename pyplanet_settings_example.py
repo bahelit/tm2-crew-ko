@@ -65,7 +65,14 @@ KNOCKOUT_STARTUP_MODE = 'botn'
 APPS = {
     'default': [
         # ... the contrib apps you already run (admin, jukebox, karma,
-        #     local_records, live_rankings, ...) ...
+        #     local_records, ...) ...
         'apps.knockout',  # <-- the Knockout / BOTN app
+
+        # Do NOT enable 'pyplanet.apps.contrib.live_rankings' alongside this app.
+        # Its widget sits on the left (around x -124.75) and lands on top of the
+        # match HUD (apps/knockout/templates/hud.xml, x -159..-113 from y=33) during
+        # the BOTN and cup warm-ups and through the cup match. The match HUD already
+        # shows the same running order, with gaps, the elimination bubble and the cup
+        # points column. Enable it only if you turn the match HUD off.
     ]
 }

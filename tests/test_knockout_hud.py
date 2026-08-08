@@ -111,6 +111,20 @@ def test_cup_map_value():
 	assert hud.cup_map_value('x', 3) == '1 of 3'
 
 
+def test_title_textsize_tiers():
+	# The panel's title tab is 42 units wide (bg_width 46 less a 2-unit inset each
+	# side). Short titles keep the big font; the long ones step down rather than
+	# wrapping into the stats block below.
+	assert hud.title_textsize('MATCH 30', 42) == '2'
+	assert hud.title_textsize('QUICK KNOCKOUT', 42) == '2'          # 14 chars, the boundary
+	assert hud.title_textsize('BOWL OF THE NIGHT', 42) == '1.5'     # 17 -- unchanged from before
+	assert hud.title_textsize('FRIDAY KNOCKOUT CUP', 42) == '1.5'   # 19, a shipped preset name
+	assert hud.title_textsize('A' * 20, 42) == '1'
+	# No title yet / empty: the big font, not a crash.
+	assert hud.title_textsize('', 42) == '2'
+	assert hud.title_textsize(None, 42) == '2'
+
+
 def test_ml_num_avoids_broken_size_syntax():
 	# Jinja would render 64.0 as "64.0", producing size="64.0. 38.0." (invalid).
 	assert hud.ml_num(64.0) == 64

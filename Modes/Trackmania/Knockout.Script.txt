@@ -318,7 +318,7 @@ UI::UnloadModule(UIModules::C_Module_ViewersCount);
 // checkpoint-ranking list; our SPLITS feed (templates/splits.xml, x 62..126 from
 // y=-56) is the same information with the knockout's per-CP best gap, and the two
 // land on top of each other. SmallScoresTable (-158.5,40) likewise sits on the
-// left-side match HUD (templates/hud.xml, x -159..-95 from y=33). Ours win; both
+// left-side match HUD (templates/hud.xml, x -159..-113 from y=33). Ours win; both
 // stock modules fall back to an engine overlay, so hide those as well.
 UI::UnloadModule(UIModules::C_Module_TimeGap);
 UIManager.UIAll.OverlayHideCheckPointList = True;

@@ -2,7 +2,7 @@ from pyplanet.views.template import TemplateView
 
 from ..hud_format import (
 	format_race_time, format_gap, format_hud_name, match_label, round_value,
-	hud_applies, is_practice_phase, ml_num, cup_map_value,
+	hud_applies, is_practice_phase, ml_num, cup_map_value, title_textsize,
 )
 
 # Layout mirrors the BOTN countdown: a title tab (TITLE_H) then a body panel.
@@ -25,6 +25,22 @@ ROWS_GAP_SEASON = 9
 # zone) are kept so the leaders and the elimination bubble are always visible.
 HEAD_ROWS = 4
 MAX_ROWS = 16
+
+# Panel geometry. 46 wide is the footprint of the cup standings widget this panel
+# replaced; it keeps the board compact and leaves x -113..-95 back to PyPlanet's
+# own left-hand widgets during the cup's TimeAttack phases. The column bands are
+# derived from these in get_context_data() and passed to the template ready-made
+# -- the template must never do arithmetic (see hud_format.ml_num).
+BG_WIDTH = 46
+PAD = 2            # left/right margin inside the panel
+RANK_X = 2
+RANK_W = 4         # "16" at textsize 1 is about 2.3 units
+NAME_X = 6
+TIME_W = 12        # fits the leader's absolute "1:01.000" (about 9 units)
+PTS_W = 8          # three-digit cup totals
+COL_GAP = 1        # clear space between the time and points columns
+STAT_SPLIT = 24    # x where the stat label box ends and its right-aligned value starts
+TITLE_TEXT_W = BG_WIDTH - 4   # usable width of the title tab
 
 # Per-cell colours.
 WHITE = 'FFFFFF'      # rank + name (clan-tag $codes colour the names themselves)
@@ -76,11 +92,19 @@ class MatchHud(TemplateView):
 			dict(label=label, value=value, y=ml_num(STATS_TOP - index * STATS_STEP))
 			for index, (label, value) in enumerate(self._stats())
 		]
-		# Season column: widen the panel and shift the time column left to make room
-		# for a right-hand points column. All geometry is precomputed here so the
-		# template stays arithmetic-free.
+		# The panel is a fixed 46 wide in both cases: a cup's points column is paid for
+		# by pulling the time column left and shortening the name column, not by
+		# widening the board. All geometry is precomputed here so the template stays
+		# arithmetic-free -- Jinja renders a float as "46.0", which turns
+		# size="{{ w }}. {{ h }}." into "46.0. 38.0." and the quad silently never draws.
 		data['show_season'] = self.show_season
-		bg_width = 64 if self.show_season else 54
+		bg_width = BG_WIDTH
+		right = bg_width - PAD
+		time_x = right - (PTS_W + COL_GAP) if self.show_season else right
+		# Bands abut exactly, so a long nickname is clipped at the box edge rather than
+		# running under the time. Do NOT truncate names in Python instead: they carry
+		# clan-tag $codes and cutting one mid-code corrupts the rest of the row.
+		name_w = time_x - TIME_W - NAME_X
 		rows_start = self._rows_start()
 		# Body runs from under the title tab to just past the last player row.
 		body_height = -rows_start - TITLE_H + len(self.rows) * ROW_H
@@ -92,10 +116,22 @@ class MatchHud(TemplateView):
 		data['body_height'] = ml_num(body_height)
 		data['title_w'] = ml_num(bg_width - 4)
 		data['center_x'] = ml_num(bg_width / 2)
-		data['header_val_x'] = ml_num(bg_width - 2)
+		data['header_val_x'] = ml_num(right)
 		data['divider_w'] = ml_num(bg_width - 4)
-		data['time_x'] = ml_num(50 if self.show_season else 52)
-		data['pts_x'] = ml_num(62)
+		# Stat lines: an explicit split so the left label and the right-aligned value
+		# cannot overlap. At 46 wide there is no slack left to absorb it.
+		data['stat_label_w'] = ml_num(STAT_SPLIT - PAD)
+		data['stat_val_w'] = ml_num(right - STAT_SPLIT)
+		data['rank_x'] = ml_num(RANK_X)
+		data['rank_w'] = ml_num(RANK_W)
+		data['name_x'] = ml_num(NAME_X)
+		data['name_w'] = ml_num(name_w)
+		data['time_x'] = ml_num(time_x)
+		data['time_w'] = ml_num(TIME_W)
+		# Emitted even without a cup (where they go unused), so the template never
+		# sees a Jinja Undefined.
+		data['pts_x'] = ml_num(right)
+		data['pts_w'] = ml_num(PTS_W)
 		data['title_textsize'] = self.title_textsize
 		return data
 
@@ -119,17 +155,16 @@ class MatchHud(TemplateView):
 
 		if getattr(live, 'is_botn', False):
 			self.match_text = BOTN_TITLE
-			# Long title needs a smaller font so it fits the tab without bleeding
-			# into the stats block below.
-			self.title_textsize = '1.5'
 		elif cup_active:
 			# Cup-of-the-day style: show the cup name while a cup is running.
 			self.match_text = (getattr(live, 'cup_name', None) or 'CUP').upper()
-			name_len = len(self.match_text)
-			self.title_textsize = '1.5' if name_len > 14 else '2'
 		else:
 			self.match_text = match_label(getattr(live, 'match_number', 0))
-			self.title_textsize = '2'
+		# A long title needs a smaller font so it fits the tab without wrapping down
+		# into the stats block below. One rule for all three paths: the tab is only 42
+		# units wide, so "BOWL OF THE NIGHT" and the 19-character preset cup names both
+		# step down a tier.
+		self.title_textsize = title_textsize(self.match_text, TITLE_TEXT_W)
 		if practice:
 			self.round_text = 'PRACTICE'
 		else:
@@ -218,8 +253,10 @@ class MatchHud(TemplateView):
 		"""The header stat lines, top to bottom, as (label, value) pairs. MAP joins
 		them while a (non-BOTN) cup is running so the field can see how far along it
 		is. The mode announces the double-knockout threshold in chat, so the board
-		stays short: three lines at most, which also keeps it clear of PyPlanet's own
-		left-hand widgets during the TimeAttack phases."""
+		stays short: three lines at most, which keeps it out of the way of PyPlanet's
+		own left-hand widgets during the TimeAttack phases. Note the panel's right edge
+		is x=-113 and live_rankings sits around x=-124.75, so they still meet there --
+		less than the old 64-wide board did, but do not treat -113 as clear."""
 		stats = []
 		if self.show_map:
 			stats.append(('MAP', self.map_text))
@@ -274,19 +311,28 @@ class MatchHud(TemplateView):
 	async def show_test(self, player=None):
 		"""Force-render the HUD with placeholder rows, ignoring match state. Used
 		by the //ko hud diagnostic to confirm the manialink renders at all. Shown
-		only to ``player`` when given, otherwise to everyone (the real path)."""
-		self.match_text = 'MATCH 30'
+		only to ``player`` when given, otherwise to everyone (the real path).
+
+		Deliberately renders the *tightest* layout the panel has -- a cup, so all four
+		columns are on, with the MAP line, a long cup title and an over-long nickname --
+		so one //ko hud shows whether anything clips at 46 wide."""
+		self.match_text = 'FRIDAY KNOCKOUT CUP'
 		self.round_text = '12/21'
-		self.map_text = ''
-		self.show_map = False
+		self.map_text = '2 of 3'
+		self.show_map = True
 		self.players_count = 4
-		self.show_season = False
-		self.title_textsize = '2'
+		self.show_season = True
+		self.title_textsize = title_textsize(self.match_text, TITLE_TEXT_W)
 		self.rows = [
-			dict(gap=False, danger=False, rank=1, name='Test A', time='12.470', name_color=WHITE, time_color=GREEN),
-			dict(gap=False, danger=False, rank=2, name='Test B', time='+0.031', name_color=WHITE, time_color=GREEN),
-			dict(gap=False, danger=False, rank=3, name='Test C', time='+0.250', name_color=WHITE, time_color=GREEN),
-			dict(gap=False, danger=True, rank=4, name='Test D', time='+0.500', name_color=WHITE, time_color=RED),
+			# Row 1 carries the worst-case absolute time; row 2 the worst-case nickname.
+			dict(gap=False, danger=False, rank=1, name='Test A', time='1:01.470',
+				name_color=WHITE, time_color=GREEN, season_points=12),
+			dict(gap=False, danger=False, rank=2, name='TestPlayerWithALongName', time='+0.031',
+				name_color=WHITE, time_color=GREEN, season_points=9),
+			dict(gap=False, danger=False, rank=3, name='Test C', time='+0.250',
+				name_color=WHITE, time_color=GREEN, season_points=7),
+			dict(gap=False, danger=True, rank=4, name='Test D', time='+0.500',
+				name_color=WHITE, time_color=RED, season_points=5),
 		]
 		self._layout(self.rows)
 		# player_logins, not player: TemplateView.display swallows an unknown `player`

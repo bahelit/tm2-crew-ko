@@ -1,7 +1,8 @@
 <frame pos="-159. 33." z-index="50">
 	<!-- title tab: separate black strip, matching the BOTN countdown header -->
 	<quad pos="0. 0." size="{{ bg_width }}. {{ title_h }}." halign="left" valign="top" z-index="-1" bgcolor="000000" opacity="0.85" />
-	<label pos="{{ center_x }}. -1.6." size="{{ title_w }}. 4." halign="center" valign="top" z-index="1"
+	<!-- valign=center so all three title font tiers sit level in the tab -->
+	<label pos="{{ center_x }}. -3.5." size="{{ title_w }}. 5." halign="center" valign="center" z-index="1"
 		textsize="{{ title_textsize }}" textfont="GameFontBlack" textcolor="FFFFFF" text="{{ match_text }}" />
 
 	<!-- body backing: sized in the view so it always covers stats + every player row -->
@@ -9,15 +10,15 @@
 
 	<!-- header stats: MAP (cup, never BOTN), ROUND, PLAYERS -->
 	{% for stat in stats %}
-	<label pos="2. {{ stat.y }}." size="28. 3." halign="left" valign="top" z-index="1"
+	<label pos="2. {{ stat.y }}." size="{{ stat_label_w }}. 3." halign="left" valign="top" z-index="1"
 		textsize="1" textfont="GameFontSemiBold" textcolor="FFFFFF" text="{{ stat.label }}" />
-	<label pos="{{ header_val_x }}. {{ stat.y }}." size="24. 3." halign="right" valign="top" z-index="1"
+	<label pos="{{ header_val_x }}. {{ stat.y }}." size="{{ stat_val_w }}. 3." halign="right" valign="top" z-index="1"
 		textsize="1" textfont="GameFontSemiBold" textcolor="FFFFFF" text="{{ stat.value }}" />
 	{% endfor %}
 
 	<!-- points column heading, in the gap between the stats and the first row -->
 	{% if show_season %}
-	<label pos="{{ pts_x }}. {{ col_head_y }}." size="12. 3." halign="right" valign="top" z-index="1"
+	<label pos="{{ pts_x }}. {{ col_head_y }}." size="{{ pts_w }}. 3." halign="right" valign="top" z-index="1"
 		textsize="0" textfont="GameFontSemiBold" textcolor="FFCC00" text="CUP" />
 	{% endif %}
 
@@ -30,14 +31,14 @@
 	<label pos="{{ center_x }}. {{ row.y }}." size="{{ title_w }}. 3.5." halign="center" valign="top" z-index="1"
 		textsize="1" textcolor="AAAAAA" text="• • •" />
 	{% else %}
-	<label pos="2. {{ row.y }}." size="6. 3.5." halign="left" valign="top" z-index="1"
+	<label pos="{{ rank_x }}. {{ row.y }}." size="{{ rank_w }}. 3.5." halign="left" valign="top" z-index="1"
 		textsize="1" textfont="GameFontSemiBold" textcolor="{{ row.name_color }}" text="{{ row.rank }}" />
-	<label pos="8. {{ row.y }}." size="32. 3.5." halign="left" valign="top" z-index="1"
+	<label pos="{{ name_x }}. {{ row.y }}." size="{{ name_w }}. 3.5." halign="left" valign="top" z-index="1"
 		textsize="1" textfont="GameFontSemiBold" textcolor="{{ row.name_color }}" text="{{ row.name }}" />
-	<label pos="{{ time_x }}. {{ row.y }}." size="18. 3.5." halign="right" valign="top" z-index="1"
+	<label pos="{{ time_x }}. {{ row.y }}." size="{{ time_w }}. 3.5." halign="right" valign="top" z-index="1"
 		textsize="1" textfont="GameFontSemiBold" textcolor="{{ row.time_color }}" text="{{ row.time }}" />
 	{% if show_season and row.season_points is not none %}
-	<label pos="{{ pts_x }}. {{ row.y }}." size="12. 3.5." halign="right" valign="top" z-index="1"
+	<label pos="{{ pts_x }}. {{ row.y }}." size="{{ pts_w }}. 3.5." halign="right" valign="top" z-index="1"
 		textsize="1" textfont="GameFontSemiBold" textcolor="FFCC00" text="{{ row.season_points }}" />
 	{% endif %}
 	{% endif %}

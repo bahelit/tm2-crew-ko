@@ -14,7 +14,7 @@ from .season import SeasonController
 from .controllers.live import LiveController
 from .markers import MarkersController
 from .config import PresetConfig, BUNDLED_PRESETS_PATH
-from .views import CupWidget, CupTicker, CupLowerThird, MatchHud, FinishCountdown, BotnCountdown, SplitsHud
+from .views import CupTicker, CupLowerThird, MatchHud, FinishCountdown, BotnCountdown, SplitsHud
 from . import score_modes
 from . import callbacks
 from .loader_fix import install_selfhealing_loader
@@ -108,15 +108,6 @@ class KnockoutConfig(AppConfig):
 			type=str,
 			description='Directory for //cup export files (blank = working directory)',
 			default='',
-		)
-		self.setting_show_cup_widget = Setting(
-			'show_cup_widget',
-			'Show Live Cup Widget',
-			Setting.CAT_BEHAVIOUR,
-			type=bool,
-			description='Show a live standings widget during an active cup (experimental)',
-			default=False,
-			change_target=self._on_display_setting_changed,
 		)
 		self.setting_show_overlays = Setting(
 			'show_overlays',
@@ -233,7 +224,6 @@ class KnockoutConfig(AppConfig):
 			self.setting_default_score_mode,
 			self.setting_payouts_enabled,
 			self.setting_cup_export_path,
-			self.setting_show_cup_widget,
 			self.setting_show_overlays,
 			self.setting_show_match_hud,
 			self.setting_vod_markers_enabled,
@@ -344,11 +334,18 @@ class KnockoutConfig(AppConfig):
 		self.botn = BotnController(self)
 		await self.botn.on_start()
 
-		# Optional live standings widget.
-		self._show_widget = await self.setting_show_cup_widget.get_value()
-		self.widget = CupWidget(self)
-		if self._show_widget and self.cup.active_cup:
-			await self.update_widget()
+		# Transitional: the retired cup standings widget (a second, smaller board that
+		# overlapped this one during cups and BOTN) may still be painted on clients
+		# that were connected when the previous build was running -- a manialink stays
+		# up until something replaces it, and nothing calls hide() on it any more. One
+		# empty page under the old id clears it. Safe to delete once every regular has
+		# reconnected.
+		try:
+			await self.instance.gbx(
+				'SendDisplayManialinkPage',
+				'<manialink id="knockout__cup_widget" version="3"></manialink>', 0, False)
+		except Exception:
+			logger.exception('Knockout: could not clear the retired cup widget')
 
 		# Finally, put the server into its configured resting state for this boot
 		# (knockout idle in TimeAttack, or an auto-started Bowl of the Night). Runs
@@ -760,7 +757,6 @@ class KnockoutConfig(AppConfig):
 	async def on_match_recorded(self, map_start_time, standings):
 		"""Called by capture after a finished map's standings are persisted."""
 		await self.cup.on_match_recorded(map_start_time, standings)
-		await self.update_widget()
 		# Season totals changed -> refresh the cache and repaint the HUD column.
 		live = getattr(self, 'live', None)
 		if live is not None:
@@ -783,7 +779,6 @@ class KnockoutConfig(AppConfig):
 		"""
 		await self.results.announce_top(cup)
 		await self.results.show_all(cup)
-		await self.hide_widget()
 		# The cup just completed on its final knockout map; drop back to TimeAttack for
 		# the next map so the server doesn't keep cycling knockout after the cup is done.
 		# capture.record_match usually arms this before the first await; repeat here in
@@ -822,31 +817,13 @@ class KnockoutConfig(AppConfig):
 		# a lie, and re-storing it would count as an extra cup map.
 		return bool(await self.capture.record_match(standings))
 
-	async def update_widget(self):
-		"""Refresh the live widget, or hide it when no cup is active / disabled."""
-		if not getattr(self, '_show_widget', False) or not self.cup.active_cup:
-			await self.hide_widget()
-			return
-		standings = await self.results.compute_standings(self.cup.active_cup)
-		try:
-			await self.widget.refresh(self.cup.active_cup, standings)
-		except Exception:
-			pass
-
-	async def hide_widget(self):
-		try:
-			await self.widget.hide()
-		except Exception:
-			pass
-
 	async def _on_display_setting_changed(self, *args, **kwargs):
 		"""
-		Re-read the cached display flags when show_overlays / show_match_hud /
-		show_cup_widget are toggled at runtime (via //settings), so the change
-		takes effect immediately instead of needing an app reload.
+		Re-read the cached display flags when show_overlays / show_match_hud are
+		toggled at runtime (via //settings), so the change takes effect immediately
+		instead of needing an app reload.
 		"""
 		self._overlays_enabled = await self.setting_show_overlays.get_value()
-		self._show_widget = await self.setting_show_cup_widget.get_value()
 
 		# Match HUD package (left panel, splits, finish countdown) uses the live
 		# controller's effective gate: always on during cup/BOTN even if the global
@@ -866,8 +843,6 @@ class KnockoutConfig(AppConfig):
 			await live._refresh_overlays()
 		else:
 			self._match_hud_enabled = await self.setting_show_match_hud.get_value()
-
-		await self.update_widget()
 
 	async def _hide_view(self, view):
 		if view is None:

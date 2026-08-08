@@ -176,14 +176,12 @@ class CupCommands:
 			'Stream box: pure spectator or $fff/ko stream on$bbb.',
 			player,
 		)
-		await self.app.update_widget()
 		await self._refresh_hud_season()
 
 	async def cmd_off(self, player, data, **kwargs):
 		cup = await self.cup.stop_cup()
 		if cup:
 			await self.instance.chat('$ff0>>> Cup $fff{}$ff0 stopped.'.format(cup.name))
-			await self.app.hide_widget()
 			await self._refresh_hud_season()
 			# Drop the server back to TimeAttack between cups.
 			await self.app.return_to_timeattack()
@@ -211,7 +209,6 @@ class CupCommands:
 		# complete_cup is a no-op if force_record already finished a fixed-length cup.
 		if self.cup.active_cup:
 			await self.cup.complete_cup()
-		await self.app.hide_widget()
 		await self._refresh_hud_season()
 		await self.app.return_to_timeattack()
 

@@ -160,6 +160,29 @@ def match_label(match_number):
 	return 'KNOCKOUT'
 
 
+# Worst-case glyph width per character for the HUD's title tab, per textsize tier
+# (uppercase GameFontBlack, with a small margin over the width measured from the
+# BOTN countdown header: "PRACTICE ENDS IN" -- 16 chars -- fits a 44-unit label at
+# textsize 2, i.e. about 2.75 units a character).
+TITLE_TIERS = (('2', 2.9), ('1.5', 2.2), ('1', 1.5))
+
+
+def title_textsize(text, width):
+	"""Font tier for the HUD's title tab: the largest size whose worst-case width
+	still fits ``width`` units. Labels clip at their box rather than shrinking, and
+	an over-long title wraps down into the stats block, so this has to be picked up
+	front. At the panel's 42-unit tab: ``'2'`` up to 14 characters, ``'1.5'`` to 19,
+	``'1'`` beyond -- which keeps "BOWL OF THE NIGHT" and the 19-character preset cup
+	names ("FRIDAY KNOCKOUT CUP") on the middle tier."""
+	n = len(text or '')
+	if n <= 0:
+		return '2'
+	for size, char_w in TITLE_TIERS:
+		if n * char_w <= width:
+			return size
+	return '1'
+
+
 def round_value(round_no, total):
 	"""Right-hand value for the HUD's ``ROUND`` line: ``x/y`` (or just ``x`` when
 	the map is unbounded). An em dash before the first round starts."""

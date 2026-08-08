@@ -24,6 +24,8 @@ Set the mode in your matchsettings playlist. Do not enable `S_UseLegacyXmlRpcCal
 
 Cup presets (`friday`, `weekly`, `quick`) ship inside `apps/knockout/presets.json` and load automatically — no extra install step. Override with `KNOCKOUT_CUP_PRESETS_PATH` in `settings/base.py` (or the live `cup_presets_path` setting) only if you need custom cups.
 
+**Updating an existing server** — see [DEPLOY.md](DEPLOY.md): the path map (the server spells it `TrackMania`, and `Libs/crew/` is *not* under `Modes/`), which files a release deletes, and why an update needs a restart rather than `//reload`.
+
 ---
 
 ## Game modes

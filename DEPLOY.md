@@ -151,6 +151,40 @@ undoing, so a rollback is just files.
 
 ## Release notes
 
+### 2026-08-19 — stacking shields and a stable splits board
+
+Two changes, and they need **both halves deployed together**.
+
+*Shields now stack and carry.* An unspent shield used to evaporate at the map change
+(`StartKnockout` runs every map and zeroed the bank). Shields now bank up to
+`S_MaxShields` (new mode setting, default **3**) and survive every map of a cup. The
+bank is cleared only when a new cup starts or an admin runs `//ko shields reset` —
+both of which travel as a bumped `S_ShieldEpoch` (new hidden mode setting). A ninth
+mode callback, `KOShieldState`, carries the authoritative `login:count` bank so the
+app can show a stack it never saw earned (carried over, or earned while the app was
+reloading).
+
+*The SPLITS panel is a standings board.* It was a rolling newest-first feed of the
+last six crossings, so every checkpoint anybody hit shoved every name down a row. It
+is now one row per player ordered by race progress; a row moves only when its player
+is genuinely overtaken. Same six rows, same geometry.
+
+**Files to copy:** the whole of `apps/knockout/` plus
+`Modes/Trackmania/Knockout.Script.txt`. **Copy the mode script first.**
+
+**Files to DELETE on the server:** none.
+
+**Half-deploy symptoms.** New app + old script: `//ko shields` reports that the
+running mode has no `S_ShieldEpoch` / `S_MaxShields`, and `//ko shields reset` is a
+silent no-op (nothing else breaks — the app probes before pushing, so it never faults
+the settings batch). New script + old app: shields carry correctly mode-side but the
+HUD shows at most one `✚` and loses it at each map change.
+
+**The mode script needs a reload, not just a file copy.** The dedicated server holds
+it compiled in memory. After restarting PyPlanet, run `//cup setup knockout_friday`
+(or `//cup on quick`, or restart the dedicated server) so the new script actually
+loads.
+
 ### 2026-08-08 — one left-side HUD panel
 
 Two panels were being drawn in the same top-left corner and overlapped during

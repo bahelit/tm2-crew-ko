@@ -72,7 +72,8 @@ At the cutoff BOTN pushes its whole knockout configuration (rounds per map, doub
 | Command | What it does |
 |---|---|
 | `//ko hud` | Match HUD diagnostic: phase, callback counts, shields held, force-refresh + test render. |
-| `//ko splits` | Splits-feed diagnostic: waypoint/finish signal counts, last waypoint payload, round gate, test render. |
+| `//ko splits` | Splits-board diagnostic: waypoint/finish signal counts, last waypoint payload, round gate, test render. |
+| `//ko shields [reset]` | Report the shield bank (`login×N`), or `reset` to clear every stack. |
 | `//ko fake <n\|off>` | Testing: connect *n* fake players (or drop them all). |
 | `//ko simulate [maps] [players]` | Testing: record fabricated maps through the real scoring path. |
 | `//ko streamstart` | Mark t=0 for VOD highlight timestamps. |
@@ -96,20 +97,29 @@ Two tools for when you are the only one on the server.
 
 ## Shields (Friday)
 
-No admin command — driven by the mode when `S_EnableShields` is on (Friday preset).
+Driven by the mode when `S_EnableShields` is on (Friday preset). `//ko shields` reports the
+bank; `//ko shields reset` clears it.
 
 | | |
 |---|---|
-| **Earn** | Fastest warm-up finish → one shield |
-| **Spend** | Only when that player would be eliminated (not DNF / give-up) |
+| **Earn** | Fastest warm-up finish → one shield, once per map |
+| **Cap** | Stacks up to `S_MaxShields` (default **3**); at the cap the warm-up winner earns nothing and chat says so |
+| **Carry** | Unspent shields survive the map change and carry across **every map of the cup** |
+| **Reset** | A new cup (`//cup on` / `//cup setup`), or `//ko shields reset`. Nothing else empties the bank |
+| **Spend** | Only when that player would be eliminated (not DNF / give-up); one shield per save |
 | **Effect** | Saves them only; does not knock the next player |
-| **HUD** | `✚` next to holders on the left match board |
+| **HUD** | One `✚` per banked shield next to the name on the left match board |
 | **Warm-up** | Friday: **2 rounds** (`S_WarmUpNb=2`); each ends when everyone has finished, capped at 2 min (`S_WarmUpDuration=120`). BOTN uses the same cap with `botn_warmup_laps` rounds. Give-up respawns the player at the start (practice lap, not a withdrawal) — Friday and BOTN alike |
 | **Back to TA** | Warm-up settings are zeroed on every return to TimeAttack — mode settings persist by name, so otherwise the idle server keeps warming up |
 
 Deploy **both** `apps/knockout/` and `Modes/Trackmania/Knockout.Script.txt` or mode behavior (warm-up clock, shields, scoring callbacks) won’t match the app.
 
 Shields need the mode’s `KO_WarmUp` (tracks warm-up finish times). An old script that only calls stock `MB_WarmUp` never awards shields.
+
+Stacking and the reset need the **current** script: the app pushes `S_ShieldEpoch` and reads
+`S_MaxShields`, neither of which an older `Knockout.Script.txt` declares. `//ko shields` says
+so plainly when the running mode is missing them — until the script is redeployed *and* the
+mode reloaded, `//ko shields reset` is a silent no-op.
 
 ---
 

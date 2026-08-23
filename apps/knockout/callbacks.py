@@ -16,6 +16,7 @@ Contract (mode -> app); see KNOCKOUT_REBUILD_SPEC.md section 3.1:
     KORoundStart      round:total
     KOShieldAwarded   login
     KOShieldUsed      login
+    KOShieldState     [login:count, ...]
 
 Every callback's payload is parsed here so the controllers only subscribe and
 react -- they never re-implement the wire format.
@@ -37,9 +38,10 @@ ARRAY_CALLBACKS = {
 	'KORoundOrder': 'parse_round_order',
 	'KORoundStart': 'parse_round_start',
 	'KOMatchStandings': 'parse_standings',
+	'KOShieldState': 'parse_shield_state',
 }
 
-# The full §3.1 contract -- eight callbacks.
+# The full §3.1 contract -- nine callbacks.
 ALL_CALLBACKS = SINGLE_LOGIN_CALLBACKS + tuple(ARRAY_CALLBACKS)
 
 
@@ -125,6 +127,30 @@ async def parse_standings(source, signal=None, **kwargs):
 		standings.append(dict(login=login, points=points))
 	standings.sort(key=lambda entry: entry['points'], reverse=True)
 	return dict(standings=standings)
+
+
+async def parse_shield_state(source, signal=None, **kwargs):
+	"""
+	Parse a KOShieldState payload (``["login:count", ...]``) into
+	``{'counts': {login: int}}`` -- the mode's authoritative shield bank.
+
+	Entries with no ``:`` are skipped, same as parse_standings: an empty bank arrives
+	as the bare callback name, and without that guard "KOShieldState" itself would be
+	read as a player holding shields. Counts that are not positive integers are
+	dropped, mirroring the mode's "only holders are stored" invariant.
+	"""
+	counts = {}
+	for item in _flatten(source):
+		login, sep, raw_count = str(item).partition(':')
+		if not login or not sep:
+			continue
+		try:
+			count = int(raw_count)
+		except (TypeError, ValueError):
+			continue
+		if count > 0:
+			counts[login] = count
+	return dict(counts=counts)
 
 
 def first_login(payload):

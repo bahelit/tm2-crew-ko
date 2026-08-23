@@ -56,7 +56,7 @@
 //      move survival tracking to a private per-login variable.
 //   3. No double round-stop at the field-of-1 endgame (RoundsBase2's play loop
 //      also stops the round; ours calls MB_StopRound() when <=1 remain).
-//   4. All 8 KO* callbacks arrive in the PyPlanet log under
+//   4. All 9 KO* callbacks arrive in the PyPlanet log under
 //      S_UseLegacyXmlRpcCallbacks = 0 (PyPlanet forces this). THIS IS THE ONE THAT
 //      FAILED on 2026-08-02, twice, for two independent reasons: the senders used
 //      the legacy lib (fixed), and the v2 lib was never enabled for a script loaded
@@ -66,7 +66,7 @@
 
 #Extends "Modes/TrackMania/Base/RoundsBase2.Script.txt"
 
-#Const Version		"2026-08-03a"
+#Const Version		"2026-08-22a"
 #Const ScriptName	"Knockout.Script.txt"
 
 // Our own minimal message lib (no domino54).
@@ -94,12 +94,14 @@
 #Setting S_WarmUpDuration		-1		as _("Warm-up time cap per round in seconds (-1 = none; a round ends when everyone is done):")
 #Setting S_FinishCountdown		30		as _("Seconds to finish after the first player (DNFs the rest):")
 #Setting S_EnableShields		False	as _("Earned shields: warm-up fastest banks a one-time save:")
+#Setting S_MaxShields			3		as _("Maximum shields a player can bank (0 = shields off):")
 #Setting S_DebugBotsCount		0		as _("Number of fake players (debug only):")
 #Setting S_AdminHoldStart		False	as "<hidden>" ///< Allows event admin to pause start of the next Knockout
 #Setting S_AdminSetPause		False	as "<hidden>" ///< Allows event admin to pause match before next round
 #Setting S_ShowMultilapInfo		True	as "<hidden>" ///< Laps info visible if laps count > 0
 #Setting S_CustomLayerPath		""		as "<hidden>" ///< Try to load custom layer from an XML file
 #Setting S_PreShieldLogins		""		as "<hidden>" ///< Logins (comma/space separated) granted a shield at match start (e.g. BOTD fastest)
+#Setting S_ShieldEpoch			""		as "<hidden>" ///< Change this to clear every banked shield (pushed by //cup on and //ko shields reset)
 // Override the base default: knockout plays 1 lap unless a lap map forces more.
 #Setting S_ForceLapsNb		0
 // NOTE: S_FinishTimeout is owned by RoundsBase2 now (do not redeclare). We drive
@@ -160,6 +162,15 @@ declare Boolean G_NewMatch;			///< Set at Match_StartMatch; triggers a fresh ros
 declare Text G_PrevRoundOrderSig;	///< Last KORoundOrder signature sent (throttle duplicates)
 declare Boolean G_FirstFinisherSeen;	///< Whether the round's first finisher was handled
 declare Integer[Text] G_WarmUpBestTimes;	///< login -> best warm-up race time (ms) for shields
+// Shields are banked PER LOGIN, not per CTmPlayer: a "for Player" declare dies with the
+// player object, so a reconnect would wipe a stack mid-cup. The map only ever holds
+// logins with a count >= 1 (TryConsumeShield removekey()s at zero), so it stays bounded
+// by the field and doubles as the KOShieldState payload. Never cleared per map — that is
+// the whole point; only SyncShieldEpoch clears it.
+declare Integer[Text] G_ShieldTokens;		///< login -> shields banked, carried across maps
+declare Text G_ShieldEpoch;				///< Last S_ShieldEpoch seen; a change clears the bank
+declare Boolean G_PreShieldsGranted;	///< S_PreShieldLogins already honoured this epoch
+declare Text G_PrevShieldStateSig;		///< Last KOShieldState signature sent (throttle duplicates)
 declare Integer G_ClearBigMessageAt;	///< Now-ms when Round BigMessage should clear (0 = off)
 // Xml load
 declare Ident	G_UI_RequestId;			///< Id of the request to the xml file
@@ -192,9 +203,12 @@ MB_SortScores(CTmMode::ETmScoreSortOrder::TotalPoints);
 // Start match: flag a fresh roster seed. The seed itself happens in
 // ---Rounds_WaitForPlayers--- on the match's first round, once all players +
 // debug bots have actually joined (Match_StartMatch is too early — the fake
-// users are requested later, in Match_StartMap). This reseeds every new match
-// (so late joiners and post-skip players are included), while survivors carry
-// across maps WITHIN a match (this flag is only set once per match).
+// users are requested later, in Match_StartMap).
+//
+// NOTE: Match_StartMap sets G_NewMatch too, unconditionally, so in practice EVERY map
+// reseeds the roster and zeroes match points — nothing survives a map change on the
+// strength of this flag. The one thing that does carry across maps is the shield bank
+// (G_ShieldTokens), and it carries by epoch (SyncShieldEpoch), not by match lifecycle.
 // ---------------------------------- //
 ***Match_StartMatch***
 ***
@@ -292,6 +306,15 @@ XmlRpc::RegisterCallback("KOShieldUsed", """
 * Example : ["Login"]
 """);
 
+XmlRpc::RegisterCallback("KOShieldState", """
+* Data : An array of "Login:Count" entries, one per player holding at least one shield.
+* Example : ["alice:3", "bob:1"]
+* Note : The authoritative shield bank. Sent whenever it changes, and once per map after
+*        the knockout is seeded so stacks carried over from the previous map are
+*        re-announced (KOShieldAwarded/KOShieldUsed alone cannot tell the app about a
+*        stack it never saw earned, e.g. after a controller reload mid-cup).
+""");
+
 // Interface. This block stacks AFTER RoundsBase2's Match_StartServer, which is
 // where UI::LoadModules() loads the whole module set, so unloading here sticks.
 // Module ids are the UIModules:: constants ("TMUIModule_PrevBestTime", ...), NOT
@@ -362,6 +385,9 @@ foreach (Score in Scores) Score.BestRace = Null;
 // ---------------------------------- //
 ***Match_StartMap***
 ***
+// Honour a shield reset pushed between maps BEFORE warm-up can bank anything new.
+SyncShieldEpoch();
+
 // Create debug bots (if any) up front, so they have joined Players by the time
 // the round loop's WaitForPlayers / roster seeding runs (stock modes do this here).
 Users_SetNbFakeUsers(S_DebugBotsCount, 0);
@@ -387,8 +413,8 @@ UIManager.UIAll.BigMessage = "";
 // S_WarmUpNb = number of warm-up rounds (0 skips; e.g. BOTN TA practice already served).
 // Every warm-up round ends as soon as the last player has finished. Give-up is a
 // restart here, not a withdrawal: the player respawns at the start and the round
-// waits for them (the lib's finish timeout after the first finisher, and the cap
-// below, both still apply).
+// waits for them (KO_WarmUp's straggler cut-off after the first finisher, and the
+// cap below, both still apply).
 // S_WarmUpDuration (seconds) only caps how long a round may drag on:
 //   < 0  → no cap: the round runs until everyone is done (BOTN default)
 //   == 0 → cap derived from the author time
@@ -424,10 +450,13 @@ WaitForPlayers(C_RequiredPlayersNb);
 
 // Seed the knockout roster once real players + bots have actually joined
 // (Match_StartMatch/StartMap are too early — fake users are requested later).
-// Reseed when: a new match started (G_NewMatch set in Match_StartMatch), OR none
-// of the roster's logins are still present (empty/stale roster — e.g. after a
-// //skip that swapped in new players/bots). If any roster survivor is still here
-// we do NOT reseed, so survivors carry across maps within a multi-map match.
+// Reseed when: G_NewMatch is set, OR none of the roster's logins are still present
+// (empty/stale roster — e.g. after a //skip that swapped in new players/bots).
+//
+// In practice G_NewMatch is always true here: Match_StartMap sets it on every map, so
+// every map IS a fresh knockout and the RosterPresent branch is a belt-and-braces
+// fallback. Shields are the only thing that survives the reseed — StartKnockout no
+// longer zeroes them (see there).
 declare Integer RosterPresent;
 RosterPresent = 0;
 foreach (Player in Players) if (G_PlayersRacing.exists(Player.User.Login)) RosterPresent += 1;
@@ -458,6 +487,10 @@ foreach (Score in Scores) {
 ***Match_StartRound***
 ***
 RemoveDisconnected();
+// Catch a shield reset that landed in the gap between rounds, then push the bank if it
+// changed. Throttled by signature, so this is a no-op on almost every round.
+SyncShieldEpoch();
+SendShieldState(False);
 UpdateScoresTableFooter();
 MB_SortScores(CTmMode::ETmScoreSortOrder::TotalPoints);
 UpdatePlayerColors();
@@ -526,6 +559,10 @@ declare Integer RoundGiveUpsAmount for This;
 declare Integer[] LapPlayersNbDoubled for This;
 declare Integer PrevMostLapsNb for This;
 declare Integer PrevPlayersCount for This;
+
+// One Text compare per tick, so //ko shields reset takes effect within a tick instead of
+// waiting for the next round start. Negligible next to the PendingEvents walk below.
+SyncShieldEpoch();
 
 // Drop the center "Round N" banner a few seconds after round start.
 if (G_ClearBigMessageAt > 0 && Now >= G_ClearBigMessageAt) {
@@ -857,6 +894,7 @@ XmlRpc::UnregisterCallback("KORoundOrder");
 XmlRpc::UnregisterCallback("KORoundStart");
 XmlRpc::UnregisterCallback("KOShieldAwarded");
 XmlRpc::UnregisterCallback("KOShieldUsed");
+XmlRpc::UnregisterCallback("KOShieldState");
 ***
 
 // ---------------------------------- //
@@ -956,27 +994,130 @@ Void XmlRpc_KOShieldUsed(CTmPlayer _Player) {
 	XmlRpc::SendCallback("KOShieldUsed", Data);
 }
 
+/** The whole shield bank as ["login:count", ...]. Empty when shields are disabled, so
+    turning them off mid-cup clears the HUD marks rather than leaving behind ✚ that can
+    never be spent. */
+Void XmlRpc_KOShieldState() {
+	if (!XmlRpc::CanSendCallback("KOShieldState")) return;
+	declare Text[] Data;
+	if (S_EnableShields) {
+		foreach (Login => Count in G_ShieldTokens) {
+			if (Count > 0) Data.add(Login ^ ":" ^ Count);
+		}
+	}
+	XmlRpc::SendCallback("KOShieldState", Data);
+}
+
+/** Send KOShieldState, skipping the send when the bank has not changed (same throttle
+    idea as XmlRpc_KORoundOrder). _Force sends regardless — used after every grant/spend
+    and once per map, where the app must hear the state even if it happens to match. */
+Void SendShieldState(Boolean _Force) {
+	declare Text Sig = "";
+	if (S_EnableShields) {
+		foreach (Login => Count in G_ShieldTokens) {
+			if (Count > 0) Sig ^= Login ^ ":" ^ Count ^ ";";
+		}
+	}
+	if (!_Force && Sig == G_PrevShieldStateSig) return;
+	G_PrevShieldStateSig = Sig;
+	XmlRpc_KOShieldState();
+}
+
+/** Clear every banked shield when the controller bumps S_ShieldEpoch (a new cup, or
+    //ko shields reset). Compare-and-store, so it is idempotent: apply_mode_preset pushes
+    its settings twice and a script reload replays them again, and only the first push of
+    a given token does anything. */
+Void SyncShieldEpoch() {
+	if (S_ShieldEpoch == G_ShieldEpoch) return;
+	G_ShieldEpoch = S_ShieldEpoch;
+	declare Boolean HadAny = (G_ShieldTokens.count > 0);
+	G_ShieldTokens.clear();
+	G_PreShieldsGranted = False;
+	if (HadAny) Notify::SendChat(["Shields reset — every banked shield has been cleared."]);
+	SendShieldState(True);
+}
+
 // ---------------------------------- //
 // Knockout
 // ---------------------------------- //
+
+/** Straggler cut-off after the first warm-up finisher, in milliseconds from now.
+
+    Same shape as the warm-up lib's own Private_GetFinishTimeout (5s plus a sixth of
+    the author time per lap), reproduced here because that function is private and,
+    on the timed path KO_WarmUp now takes, the lib never arms it. Keeping the number
+    identical means a slow player gets exactly the grace they got before. */
+Integer WarmUpFinishTimeout() {
+	declare Integer Laps = Map.TMObjective_NbLaps;
+	if (Laps <= 0 || !Map.TMObjective_IsLapRace) Laps = 1;
+	declare Integer LapTime = Map.TMObjective_AuthorTime / Laps;
+	if (LapTime <= 0) LapTime = 60000;
+	return 5000 + LapTime / 6;
+}
+
+/** Round length handed to the warm-up lib when the admin asked for no cap at all
+    (S_WarmUpDuration < 0).
+
+    The lib has to be given a NON-NEGATIVE limit -- a negative one puts it on the
+    untimed path, which is the bug KO_WarmUp exists to avoid -- so this is a backstop,
+    not a target: long enough (ten author-time laps) that the end-of-round tracking in
+    KO_WarmUp always gets there first. It does mean the client's round clock shows a
+    number during an "uncapped" warm-up; that clock is not what ends the round. */
+Integer WarmUpBackstopCap() {
+	declare Integer Laps = Map.TMObjective_NbLaps;
+	if (Laps <= 0 || !Map.TMObjective_IsLapRace) Laps = 1;
+	declare Integer LapTime = Map.TMObjective_AuthorTime / Laps;
+	if (LapTime <= 0) LapTime = 60000;
+	return 10000 + LapTime * 10;
+}
+
+/** True once every player on the server has put in a lap this warm-up round.
+
+    Spectators are not in Players, so they never hold a round open. Somebody who joins
+    mid-round does, until the straggler cut-off or the cap fires -- which is the same
+    deal the lib's own rule gave them. */
+Boolean WarmUpFieldIsDone(Text[] _Finishers) {
+	if (_Finishers.count <= 0) return False;
+	foreach (Player in Players) {
+		if (Player.User == Null) continue;
+		if (!_Finishers.exists(Player.User.Login)) return False;
+	}
+	return True;
+}
 
 /** Warm-up that records best finish times for shield awards.
     Stock MB_WarmUp only Valid()s events and never stores BestRace, so the
     warm-up-fastest shield path always saw an empty field. This mirrors the base
     warm-up UI (WarmUp::Start/StartRound/End) while filling G_WarmUpBestTimes.
 
-    _CapMillisec is a BACKSTOP, not the round length: a warm-up round is over as
-    soon as every player has finished or given up. WarmUp::StartRound is always
-    called in round mode (-1) because that is the only mode where the lib parks a
-    player after their run (finish -> TM::EndRace, give-up -> TM::WaitRace, neither
-    respawned) and ends the round on `PlayersRacing.count <= 0`. Passing a real
-    time limit flips the lib into time-limited mode, which respawns everyone
-    forever and disables that check -- that is why the Friday cup warm-up only
-    ended when the 2-minute clock expired. The cap is enforced here instead.
+    _CapMillisec is a BACKSTOP, not the round length: a warm-up round is over as soon
+    as every player has finished.
 
-    Give-up is the one part of that parking we undo: a warm-up lap is practice, so
-    pressing give-up must put the player back on the start line, not sit them out
-    for the rest of the round. See the LibWU3_CanSpawn re-arm in the event loop. */
+    WarmUp::StartRound is called with a NON-NEGATIVE time limit, always. That is not a
+    detail -- it is the whole fix. A negative limit puts the lib on its untimed path,
+    where Yield() ends the round the moment `PlayersRacing.count <= 0`, and that test
+    is wrong for us twice over:
+
+      * it runs from the very first Yield, including through the 6s message + spawn
+        countdown when nobody is on track yet; and
+      * on a give-up it runs in the SAME Yield that unspawned the player
+        (events are handled above it, the respawn only happens on the NEXT Yield), so
+        the last driver still out there pressing give-up ends the round for everyone.
+
+    Either way the round dies seconds after it started, for the whole server. Stock
+    modes never see it because they pass a positive S_WarmUpDuration.
+
+    The timed path also switches the lib's spawn block to respawning anyone who is
+    waiting, which IS the give-up-is-a-restart behaviour we used to hand-roll by
+    re-arming LibWU3_CanSpawn from our own event loop -- so that hack is gone.
+
+    What the timed path does NOT do is end the round when the field is home; left to
+    itself it would run the clock out, which is the "Friday cup warm-up only ended
+    after 2 minutes" complaint that sent us to the untimed path in the first place.
+    So ending the round is ours now: RoundFinishers below closes it as soon as
+    everybody has a lap in, the first finisher arms a straggler cut-off
+    (WarmUpFinishTimeout, the same number the lib used), and RoundDeadline enforces
+    S_WarmUpDuration. */
 Void KO_WarmUp(Integer _NbOfWarmUp, Integer _CapMillisec) {
 	if (_NbOfWarmUp <= 0) return;
 
@@ -994,37 +1135,33 @@ Void KO_WarmUp(Integer _NbOfWarmUp, Integer _CapMillisec) {
 	WarmUp::Start();
 	declare WarmUpPlayedNb = 0;
 	while (!WarmUp::Finished() && WarmUpPlayedNb < _NbOfWarmUp && !ServerShutdownRequested && !MatchEndRequested) {
-		WarmUp::StartRound(WarmUpPlayedNb + 1, _NbOfWarmUp, -1);
+		// Always non-negative -- see the long note above. With no configured cap this is
+		// a backstop the round-end tracking below should always beat.
+		declare Integer LibCap = Cap;
+		if (LibCap <= 0) LibCap = WarmUpBackstopCap();
+		WarmUp::StartRound(WarmUpPlayedNb + 1, _NbOfWarmUp, LibCap);
+
 		// StartRound spends 3s on the "Warmup: x/y" message then 3s on the spawn
 		// countdown before anyone can drive, so the cap starts from that point.
-		// CutOffTimeLimit is left alone (-1 in round mode) so the lib can still arm
-		// its own straggler timeout when the first player finishes.
 		declare RoundDeadline = -1;
 		if (Cap > 0) RoundDeadline = Now + 6000 + Cap;
+
+		// Round-end tracking (ours now): who has a lap in, and when the grace period
+		// for whoever is still out there runs out.
+		declare Text[] RoundFinishers;
+		declare Integer StragglerDeadline = -1;
+
 		while (!WarmUp::Finished() && !WarmUp::RoundFinished() && !ServerShutdownRequested && !MatchEndRequested) {
 			if (RoundDeadline > 0 && Now >= RoundDeadline) break;
+			if (StragglerDeadline > 0 && Now >= StragglerDeadline) break;
 			MB_Yield();
 
 			foreach (Event in PendingEvents) {
 				declare Processed = Events::Valid(Event);
-				// Give-up during a warm-up lap = restart, not "I am done". The lib
-				// spawns each player once per round (StartRound sets LibWU3_CanSpawn
-				// False after spawning) and its own Yield() below answers GiveUp with
-				// TM::WaitRace, so without this the player is parked for the rest of
-				// the round -- the practice lap they wanted to redo is over for them.
-				// Re-arming the flag makes the lib's "spawn players joining during the
-				// warm up" block put them back on the start line on the next Yield.
-				// LibWU3_CanSpawn is `for Score` and already exists, so ASSIGN to it
-				// (the declare initializer is ignored) -- same idiom as Rounds_CanSpawn.
-				// The round can still not hang: the lib arms its finish timeout once
-				// anyone finishes, and RoundDeadline caps the round regardless.
-				if (Event.Type == CTmModeEvent::EType::GiveUp) {
-					if (Event.Player != Null && Event.Player.Score != Null) {
-						declare LibWU3_CanSpawn for Event.Player.Score = True;
-						LibWU3_CanSpawn = True;
-					}
-				}
-				// Record finish times only — WarmUp owns race lifecycle.
+				// Record finish times only -- WarmUp owns race lifecycle. Give-up needs
+				// no handling here at all any more: on the timed path the lib respawns
+				// anyone who is waiting on its next Yield, which is exactly the restart
+				// a practice lap wants.
 				if (Event.Type == CTmModeEvent::EType::WayPoint && Event.IsEndRace) {
 					if (Event.Player != Null && Event.Player.User != Null && Event.Player.CurRace != Null) {
 						declare Integer T = Event.Player.CurRace.Time;
@@ -1033,6 +1170,10 @@ Void KO_WarmUp(Integer _NbOfWarmUp, Integer _CapMillisec) {
 							if (!G_WarmUpBestTimes.existskey(Login) || T < G_WarmUpBestTimes[Login]) {
 								G_WarmUpBestTimes[Login] = T;
 							}
+							if (!RoundFinishers.exists(Login)) RoundFinishers.add(Login);
+							// First finisher arms the straggler cut-off, so one player
+							// circling can never hold the warm-up open.
+							if (StragglerDeadline <= 0) StragglerDeadline = Now + WarmUpFinishTimeout();
 							// Also keep BestRace when possible (harmless for later fallback).
 							if (Event.Player.Score != Null) {
 								if (Event.Player.Score.BestRace == Null
@@ -1046,6 +1187,10 @@ Void KO_WarmUp(Integer _NbOfWarmUp, Integer _CapMillisec) {
 			}
 
 			WarmUp::Yield();
+
+			// Whole field is home: nothing left to wait for. Checked after Yield so a
+			// finish landing this tick has already been recorded above.
+			if (WarmUpFieldIsDone(RoundFinishers)) break;
 		}
 		WarmUp::EndRound();
 		WarmUpPlayedNb += 1;
@@ -1064,11 +1209,29 @@ Void KO_WarmUp(Integer _NbOfWarmUp, Integer _CapMillisec) {
 	UIManager.UIAll.UISequence = PrevUISequence;
 }
 
-/** Give the player with the fastest warm-up race a one-time shield (if enabled).
+/** Bank a shield for a player, up to S_MaxShields. The single grant primitive — every
+    earn path goes through here so the cap lives in one place. Returns True when a shield
+    was actually banked (False at the cap, or when shields are off).
+    Must be defined before its callers (ManiaScript resolves callees top-down). */
+Boolean AwardShield(CTmPlayer _Player) {
+	if (!S_EnableShields || _Player == Null || _Player.User == Null) return False;
+	declare Integer MaxShields = S_MaxShields;
+	if (MaxShields < 0) MaxShields = 0;
+	declare Text Login = _Player.User.Login;
+	declare Integer Have = 0;
+	if (G_ShieldTokens.existskey(Login)) Have = G_ShieldTokens[Login];
+	if (Have >= MaxShields) return False;
+	G_ShieldTokens[Login] = Have + 1;
+	XmlRpc_KOShieldAwarded(_Player);
+	SendShieldState(True);
+	return True;
+}
+
+/** Give the player with the fastest warm-up race a shield (if enabled and under the cap).
     Must be defined before StartKnockout (ManiaScript resolves callees top-down).
-    Prefers G_WarmUpBestTimes filled by KO_WarmUp; falls back to Score.BestRace. */
+    Reads G_WarmUpBestTimes, filled by KO_WarmUp. */
 Void AwardWarmUpShield() {
-	if (!S_EnableShields) return;
+	if (!S_EnableShields || S_MaxShields <= 0) return;
 	declare CTmPlayer BestPlayer;
 	BestPlayer = Null;
 	declare Integer BestTime;
@@ -1087,76 +1250,88 @@ Void AwardWarmUpShield() {
 		}
 	}
 
-	// Fallback: Score.BestRace if something else populated it.
-	if (BestPlayer == Null) {
-		foreach (Player in Players) {
-			if (Player.Score == Null || Player.Score.BestRace == Null) continue;
-			declare Integer T = Player.Score.BestRace.Time;
-			if (T <= 0) continue;
-			if (BestTime < 0 || T < BestTime) {
-				BestTime = T;
-				BestPlayer = Player;
-			}
-		}
-	}
+	// There used to be a Score.BestRace fallback here. It has been removed: StartKnockout
+	// runs BEFORE the map's first Match_StartRound (which is what nulls BestRace), so on a
+	// map with no warm-up it could still hold the PREVIOUS map's last finish and hand out a
+	// phantom shield. The old one-shield cap plus the per-map wipe hid that; now that stacks
+	// carry it would inflate a bank by one every map. KO_WarmUp fills G_WarmUpBestTimes
+	// reliably, so the fallback has no job left.
 
 	if (BestPlayer != Null) {
-		declare Integer ShieldTokens for BestPlayer;
-		if (ShieldTokens < 1) {
-			ShieldTokens = 1;
-			XmlRpc_KOShieldAwarded(BestPlayer);
-			Notify::SendChat(["$<%1$> earns a shield for the fastest warm-up!", BestPlayer.User.Name]);
+		if (AwardShield(BestPlayer)) {
+			Notify::SendChat(["$<%1$> earns a shield for the fastest warm-up! (%2 banked)",
+				BestPlayer.User.Name, TL::ToText(G_ShieldTokens[BestPlayer.User.Login])]);
+		} else {
+			Notify::SendChat(["$<%1$> was fastest in warm-up but already holds %2 shields.",
+				BestPlayer.User.Name, TL::ToText(S_MaxShields)]);
 		}
 	}
 }
 
-/// Start a new Knockout (seed the racing set + shields).
+/// Start a new Knockout (seed the racing set; shields carry over from the previous map).
 Void StartKnockout() {
 	G_PlayersRacing.clear();
 	G_RoundsPlayed = 0;
-	// Logins pre-granted a shield this match (e.g. the BOTD fastest-practice time).
-	declare Text[] PreShieldLogins = TL::Split(", ", S_PreShieldLogins);
 	foreach (Player in Players) {
 		G_PlayersRacing.add(Player.User.Login);
 		// Fresh knockout: zero the survival score (match-points bucket drives the
 		// scoreboard Points column — see Match_StartServer SaveInScore).
 		if (Player.Score != Null) Scores::SetPlayerMatchPoints(Player.Score, 0);
-		declare Integer ShieldTokens for Player;
-		ShieldTokens = 0;
-		if (S_EnableShields && PreShieldLogins.exists(Player.User.Login)) {
-			ShieldTokens = 1;
-			XmlRpc_KOShieldAwarded(Player);
-		}
+		// NOTE: shields are deliberately NOT zeroed here. Match_StartMap flags a reseed
+		// every map, so this function runs every map; zeroing was what made an unspent
+		// shield evaporate at the map change. The bank is only cleared by SyncShieldEpoch.
 		XmlRpc_KOPlayerAdded(Player);
 	}
-	// After warm-up (KO_WarmUp runs before WaitForPlayers → StartKnockout), the
-	// fastest warm-up finish in G_WarmUpBestTimes earns a one-time save. Tokens
-	// were zeroed above so this is the primary earn path for Friday cups.
+
+	// Logins pre-granted a shield (e.g. the BOTD fastest-practice time). Once per epoch,
+	// NOT once per map: this function runs every map, so an unguarded grant would hand a
+	// listed login +1 per map and hit the cap for free by map 3.
+	if (S_EnableShields && !G_PreShieldsGranted) {
+		declare Text[] PreShieldLogins = TL::Split(", ", S_PreShieldLogins);
+		foreach (Player in Players) {
+			if (PreShieldLogins.exists(Player.User.Login)) {
+				declare Granted = AwardShield(Player);
+			}
+		}
+		G_PreShieldsGranted = True;
+	}
+
+	// After warm-up (KO_WarmUp runs before WaitForPlayers → StartKnockout), the fastest
+	// warm-up finish in G_WarmUpBestTimes banks another shield, up to S_MaxShields.
 	AwardWarmUpShield();
+
+	// Re-announce the whole bank for the new map. Forced (and with the throttle signature
+	// cleared) so a stack CARRIED over from the previous map reaches the app even though
+	// nothing changed — that is the only way it learns about shields it never saw earned,
+	// and it is what heals a controller that reloaded mid-cup.
+	G_PrevShieldStateSig = "";
+	SendShieldState(True);
 }
 
-/** Give a player a one-time shield (capped at one), if shields are enabled. */
-Void AwardShield(CTmPlayer _Player) {
-	if (!S_EnableShields || _Player == Null) return;
-	declare Integer ShieldTokens for _Player;
-	if (ShieldTokens < 1) {
-		ShieldTokens = 1;
-		XmlRpc_KOShieldAwarded(_Player);
-		Notify::SendChat(["$<%1$> earns a shield!", _Player.User.Name]);
-	}
-}
-
-/** Spend a player's shield to save them from a knockout, if they have one. */
+/** Spend one of a player's banked shields to save them from a knockout. */
 Boolean TryConsumeShield(CTmPlayer _Player) {
-	if (!S_EnableShields || _Player == Null) return False;
-	declare Integer ShieldTokens for _Player;
-	if (ShieldTokens > 0) {
-		ShieldTokens -= 1;
-		XmlRpc_KOShieldUsed(_Player);
-		Notify::SendChat(["$<%1$> uses a shield and survives!", _Player.User.Name]);
-		return True;
+	if (!S_EnableShields || _Player == Null || _Player.User == Null) return False;
+	declare Text Login = _Player.User.Login;
+	if (!G_ShieldTokens.existskey(Login)) return False;
+	declare Integer Have = G_ShieldTokens[Login];
+	// removekey() returns a Boolean that has to land somewhere; declared once at function
+	// scope rather than in each branch, so the two uses cannot read as a redeclaration.
+	declare Boolean Removed = False;
+	if (Have <= 0) {
+		// Should not happen (the map only holds counts >= 1), but keep the invariant.
+		Removed = G_ShieldTokens.removekey(Login);
+		return False;
 	}
-	return False;
+	if (Have <= 1) {
+		Removed = G_ShieldTokens.removekey(Login);
+	} else {
+		G_ShieldTokens[Login] = Have - 1;
+	}
+	XmlRpc_KOShieldUsed(_Player);
+	Notify::SendChat(["$<%1$> uses a shield and survives! (%2 left)",
+		_Player.User.Name, TL::ToText(Have - 1)]);
+	SendShieldState(True);
+	return True;
 }
 
 /// Whether the player is still racing.

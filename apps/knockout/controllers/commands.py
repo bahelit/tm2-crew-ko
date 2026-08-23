@@ -69,7 +69,11 @@ class CupCommands:
 			Command(command='hud', namespace='ko', target=self.cmd_hud, admin=True,
 				description='Diagnostic: report match HUD state and force a test render.'),
 			Command(command='splits', namespace='ko', target=self.cmd_splits, admin=True,
-				description='Diagnostic: report the checkpoint splits feed and force a test render.'),
+				description='Diagnostic: report the checkpoint splits board and force a test render.'),
+			Command(command='shields', namespace='ko', target=self.cmd_shields, admin=True,
+				description='Show banked shields, or "reset" to clear every stack.')
+				.add_param(name='action', required=False, default='',
+					help='"reset" clears every banked shield; omit to just report.'),
 			Command(command='fake', namespace='ko', target=self.cmd_fake, admin=True,
 				description='Testing: connect fake players to fill the server ("off" removes them).')
 				.add_param(name='count', required=True, help='How many fake players, or "off".'),
@@ -504,11 +508,28 @@ class CupCommands:
 		seen = getattr(live, 'callbacks_seen', {}) or {}
 		seen_str = ' '.join('{}={}'.format(name, seen.get(name, 0)) for name in (
 			'KOPlayerAdded', 'KOPlayerRemoved', 'KORoundOrder', 'KORoundStart',
-			'KOSendWinner', 'KOMatchStandings', 'KOShieldAwarded', 'KOShieldUsed'))
+			'KOSendWinner', 'KOMatchStandings', 'KOShieldAwarded', 'KOShieldUsed',
+			'KOShieldState'))
 		await self.instance.chat('$bbb>>> callbacks: $fff{}'.format(seen_str), player)
-		holders = sorted(getattr(live, 'shield_holders', None) or ())
+		# Overlay refreshes asked for vs ManiaLink pages actually pushed. The gap is the
+		# views dropping repaints that would redraw what is already on screen; a ratio
+		# near 1:1 during a busy round means the dedupe is not biting and clients are
+		# being flooded again (see LiveController._refresh_overlays).
 		await self.instance.chat(
-			'$bbb>>> shields: $fff{}'.format(', '.join(holders) if holders else '(none)'),
+			'$bbb>>> overlay repaints: requested=$fff{}$bbb hud sent=$fff{}$bbb '
+			'ticker sent=$fff{}$bbb | splits requested=$fff{}$bbb sent=$fff{}'.format(
+				getattr(live, 'overlay_refreshes', 0),
+				getattr(getattr(app, 'hud', None), 'sends', 0),
+				getattr(getattr(app, 'ticker', None), 'sends', 0),
+				getattr(live, 'splits_requests', 0),
+				getattr(getattr(app, 'splits', None), 'sends', 0)),
+			player,
+		)
+		await self.instance.chat(
+			'$bbb>>> shields: $fff{}$bbb max=$fff{}$bbb epoch=$fff{}'.format(
+				self._format_shield_counts(live),
+				getattr(live, 'max_shields', '?'),
+				getattr(self.app, 'shield_epoch', '') or '(never pushed)'),
 			player,
 		)
 		cup = getattr(getattr(app, 'cup', None), 'active_cup', None)
@@ -597,6 +618,13 @@ class CupCommands:
 		# if it silently hides, phase/count say no match is being raced right now.
 		if live is not None:
 			try:
+				# Force a real send. refresh() normally drops a repaint that would
+				# redraw what is already on screen, and that would make this diagnostic
+				# a lie: it would report "refreshed to everyone" having pushed nothing,
+				# which is indistinguishable from the broken render it exists to detect.
+				invalidate = getattr(hud, 'invalidate', None)
+				if invalidate is not None:
+					invalidate()
 				await hud.refresh(live)
 				if phase in ('idle', 'ended') or count <= 0:
 					await self.instance.chat(
@@ -622,10 +650,86 @@ class CupCommands:
 			logger.exception('Knockout: //ko hud test render failed')
 			await self.instance.chat('$f00>>> Test HUD render FAILED: {} (see server log).'.format(e), player)
 
-	async def cmd_splits(self, player, data, **kwargs):
-		"""Diagnostic for the bottom checkpoint-splits feed.
+	@staticmethod
+	def _format_shield_counts(live):
+		"""``login×N`` for every shield holder, richest first, for the diagnostics."""
+		counts = dict(getattr(live, 'shield_counts', None) or {})
+		if not counts:
+			return '(none)'
+		ordered = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+		return ', '.join('{}×{}'.format(login, count) for login, count in ordered)
 
-		The feed only paints while a scored round is live and at least one crossing
+	async def cmd_shields(self, player, data, **kwargs):
+		"""Report the shield bank, or clear it.
+
+		Shields stack to S_MaxShields and carry across every map of a cup, so the only
+		things that empty the bank are a new cup and this command. The reset travels as a
+		bumped ``S_ShieldEpoch`` mode setting -- see App.push_shield_epoch -- which means
+		it silently does nothing against an older Knockout.Script.txt that never declared
+		the key. Report the running mode's view of both shield settings so that
+		half-deployed state is visible rather than mysterious."""
+		app = self.app
+		live = getattr(app, 'live', None)
+		if live is None:
+			await self.instance.chat('$f00>>> No live controller (plugin not fully started?).', player)
+			return
+
+		action = (getattr(data, 'action', '') or '').strip().lower()
+		if action and action != 'reset':
+			await self.instance.chat(
+				'$f00>>> Unknown action "{}". Use $fff//ko shields$f00 or '
+				'$fff//ko shields reset$f00.'.format(action), player)
+			return
+
+		if action == 'reset':
+			reason = await app.push_shield_epoch(reason='admin')
+			if reason:
+				await self.instance.chat(
+					'$f00>>> Could not reset shields: {}.'.format(reason), player)
+				return
+			# Optimistic: the mode force-sends KOShieldState within a tick and will
+			# overwrite this with the truth either way.
+			live.shield_counts = {}
+			await live._refresh_overlays()
+			await self.instance.chat(
+				'$ff0>>> Shields reset — every banked shield cleared.', player)
+			return
+
+		# Report. Probe the running mode so a stale script shows up here, not later.
+		declared = None
+		try:
+			settings = await self.instance.mode_manager.get_settings()
+		except Exception:
+			settings = None
+		if settings is not None:
+			declared = ('S_ShieldEpoch' in settings, 'S_MaxShields' in settings,
+				settings.get('S_EnableShields'))
+
+		await self.instance.chat(
+			'$bbb>>> shields: $fff{}'.format(self._format_shield_counts(live)), player)
+		if declared is None:
+			await self.instance.chat(
+				'$bbb>>> could not read the running mode settings (see server log).', player)
+		elif not declared[0] or not declared[1]:
+			await self.instance.chat(
+				'$f00>>> The running mode is missing $fff{}$f00 — deploy the current '
+				'Knockout.Script.txt and reload the mode, or $fff//ko shields reset$f00 '
+				'will do nothing.'.format(
+					' and '.join(name for name, present in (
+						('S_ShieldEpoch', declared[0]), ('S_MaxShields', declared[1])
+					) if not present)),
+				player)
+		else:
+			await self.instance.chat(
+				'$bbb>>> enabled=$fff{}$bbb max=$fff{}$bbb epoch=$fff{}'.format(
+					declared[2], settings.get('S_MaxShields'),
+					getattr(app, 'shield_epoch', '') or '(never pushed)'),
+				player)
+
+	async def cmd_splits(self, player, data, **kwargs):
+		"""Diagnostic for the bottom checkpoint-splits standings board.
+
+		The board only paints while a scored round is live and at least one crossing
 		has been recorded, and it is driven entirely by PyPlanet race signals — so
 		when it stays blank the cause is one of: the signals never arrive, their
 		payload has no usable checkpoint ordinal, the round/phase gate is closed, or
@@ -648,9 +752,18 @@ class CupCommands:
 			enabled = 'err:{}'.format(e)
 		await self.instance.chat(
 			'$bbb>>> splits: signals waypoint=$fff{}$bbb finish=$fff{}$bbb | round=$fff{}$bbb '
-			'phase=$fff{}$bbb live_round=$fff{}$bbb hud_enabled=$fff{}$bbb feed=$fff{}$bbb rows'.format(
+			'phase=$fff{}$bbb live_round=$fff{}$bbb hud_enabled=$fff{}$bbb board=$fff{}$bbb rows'.format(
 				seen.get('waypoint', 0), seen.get('finish', 0), rnd, phase, live_round,
-				enabled, len(getattr(live, 'cp_feed', None) or ())),
+				enabled, len(getattr(live, 'cp_rows', None) or ())),
+			player,
+		)
+		# Repaint requests vs pages actually pushed. The gap is the coalescing
+		# (SPLITS_REFRESH_INTERVAL) plus the view dropping repaints that would redraw
+		# what is already on screen; a ratio near 1:1 during a busy round means one of
+		# the two is not doing its job and clients are being flooded again.
+		await self.instance.chat(
+			'$bbb>>> splits repaints: requested=$fff{}$bbb sent=$fff{}'.format(
+				getattr(live, 'splits_requests', 0), getattr(view, 'sends', 0)),
 			player,
 		)
 		note = getattr(live, 'last_waypoint_note', '')

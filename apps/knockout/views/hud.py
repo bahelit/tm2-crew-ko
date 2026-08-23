@@ -3,6 +3,7 @@ from pyplanet.views.template import TemplateView
 from ..hud_format import (
 	format_race_time, format_gap, format_hud_name, match_label, round_value,
 	hud_applies, is_practice_phase, ml_num, cup_map_value, title_textsize,
+	hud_render_signature,
 )
 
 # Layout mirrors the BOTN countdown: a title tab (TITLE_H) then a body panel.
@@ -52,6 +53,11 @@ DIM = 'AAAAAA'        # no time yet / gap marker
 # Title shown in place of "MATCH n" when the live event is a Bowl of the Night.
 BOTN_TITLE = 'BOWL OF THE NIGHT'
 
+# "We do not know what the clients are showing." refresh()/hide() skip the send when it
+# would repaint what is already on screen, and this is the state that forces one
+# through. invalidate() puts us back here -- see the note on that method.
+_UNKNOWN = object()
+
 
 class MatchHud(TemplateView):
 	"""
@@ -79,6 +85,13 @@ class MatchHud(TemplateView):
 		self.divider_y = 0.0
 		self.show_season = False
 		self.title_textsize = '2'
+		# Signature of the board the clients are currently showing: None while it is
+		# hidden, a hud_render_signature() tuple while it is up, _UNKNOWN when we cannot
+		# be sure (startup, or after invalidate()).
+		self._sent = _UNKNOWN
+		# ManiaLink pages actually pushed. Reported by //ko hud next to the controller's
+		# request count, so the dedupe can be checked on a live server.
+		self.sends = 0
 
 	async def get_context_data(self):
 		data = await super().get_context_data()
@@ -140,7 +153,16 @@ class MatchHud(TemplateView):
 		stays up for the whole Knockout: during warm-up it lists the players on the
 		server with their best lap so far; once rounds start it switches to the live
 		running order with elimination highlighting. It only hides when the loaded
-		mode is not Knockout, or when nobody is on the server to show."""
+		mode is not Knockout, or when nobody is on the server to show.
+
+		A repaint that would draw exactly what is already on screen is dropped. This
+		runs on every KORoundOrder and every best-lap improvement -- dozens of times in
+		a round, most of them leaving the board identical (a checkpoint that does not
+		change the order, a finish that beats nobody) -- and each one used to cost every
+		client a full ManiaLink page replacement and its re-layout hitch. Anything that
+		can leave a client without the page it should have -- a connect, a spectator
+		flip -- must call invalidate() first.
+		"""
 		cup_active = getattr(live, 'cup_active', False)
 		is_knockout = getattr(live, 'is_knockout', True)
 		if not hud_applies(is_knockout, cup_active):
@@ -178,7 +200,9 @@ class MatchHud(TemplateView):
 			getattr(live, 'cup_maps_played', 0), getattr(live, 'cup_map_count', 0)
 		) if self.show_map else ''
 		danger = set() if practice else set(live.danger_logins())
-		shields = set(getattr(live, 'shield_holders', None) or ())
+		# login -> shields banked. Stacks up to S_MaxShields and carries across the maps
+		# of a cup, so the HUD draws one ✚ per shield rather than a single marker.
+		shield_counts = dict(getattr(live, 'shield_counts', None) or {})
 
 		# Points column (running cup total) is part of the CotD-style match HUD during
 		# an active cup/BOTN: always on from map 1 (zeros until a map is recorded), so
@@ -229,7 +253,7 @@ class MatchHud(TemplateView):
 				gap=False,
 				danger=is_danger,
 				rank=index + 1,
-				name=format_hud_name(await self._name(login), has_shield=(login in shields)),
+				name=format_hud_name(await self._name(login), shields=shield_counts.get(login, 0)),
 				time=time_text,
 				# Names stay white so the clan-tag colours show; the danger zone reads
 				# as red times below the divider, matching the cup-of-the-day style.
@@ -245,7 +269,43 @@ class MatchHud(TemplateView):
 		if not rows:
 			await self.hide()
 			return
+		# After _layout: it is what assigns row y, the divider, and the bubble colour,
+		# so the panel state is only final here.
+		signature = hud_render_signature(self, rows)
+		if signature == self._sent:
+			return
+		# Recorded only after display() returns: doing it first would mean a transient
+		# send failure left us believing a page is on screen that never arrived, and
+		# every identical refresh afterwards would skip -- the panel would stay stale
+		# until its content happened to change.
 		await self.display()
+		self._sent = signature
+		self.sends += 1
+
+	async def hide(self, player_logins=None):
+		"""Hide the panel, skipping the send when it is already hidden for everyone.
+
+		A targeted hide (``player_logins``) is always sent and leaves the global state
+		alone -- it says nothing about what the rest of the server can see.
+		"""
+		if player_logins is not None:
+			await super().hide(player_logins=player_logins)
+			return
+		if self._sent is None:
+			return
+		await super().hide()
+		self._sent = None
+		self.sends += 1
+
+	def invalidate(self):
+		"""Forget what is on screen, so the next refresh()/hide() sends unconditionally.
+
+		ManiaLink pages live on the client: a player who just connected holds nothing
+		until something is pushed to them, and the dedupe above would happily decide the
+		panel is "already showing" and skip that push. LiveController calls this on every
+		roster change for exactly that reason.
+		"""
+		self._sent = _UNKNOWN
 
 	# ------------------------------------------------------------- helpers
 
@@ -335,6 +395,9 @@ class MatchHud(TemplateView):
 				name_color=WHITE, time_color=RED, season_points=5),
 		]
 		self._layout(self.rows)
+		# Placeholder rows are not what the live board would compute, so leave the
+		# dedupe with no opinion: the next real refresh must repaint over them.
+		self._sent = _UNKNOWN
 		# player_logins, not player: TemplateView.display swallows an unknown `player`
 		# kwarg and shows the manialink to everyone -- which made this "you only"
 		# diagnostic render on every client on the server.

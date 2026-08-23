@@ -67,6 +67,10 @@ BOTN_KNOCKOUT_SETTINGS = {
 	'S_ForceLapsNb': 0,
 	'S_WarmUpDuration': BOTN_WARMUP_CAP,
 	'S_EnableShields': False,      # Cup of the Day style; shields stay a Friday thing
+	# No S_ShieldEpoch push is needed on the BOTN handoff: shields are off here, and
+	# _switch_to_knockout always loads a fresh script, whose empty globals mean an
+	# empty shield bank anyway. (Friday's //cup on does push one -- see
+	# App.push_shield_epoch -- because it may reuse an already-running Knockout.)
 	'S_PreShieldLogins': '',
 }
 

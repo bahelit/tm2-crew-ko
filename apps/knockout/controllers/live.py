@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import time
 
@@ -5,14 +6,29 @@ from pyplanet.apps.core.maniaplanet import callbacks as mp_signals
 from pyplanet.apps.core.trackmania import callbacks as tm_signals
 
 from ..models import MatchInfo
-from ..callbacks import parse_round_order, parse_round_start, callback_login, register
+from ..callbacks import (
+	parse_round_order, parse_round_start, parse_shield_state, callback_login, register)
 from ..hud_format import (
-	format_race_time, format_gap, split_cp_label, waypoint_cp_count, describe_payload)
+	format_race_time, format_gap, split_cp_label, waypoint_cp_count, describe_payload,
+	apply_shield_delta, order_split_rows, MAX_SHIELD_MARKS, SPLITS_ROWS)
 
 logger = logging.getLogger(__name__)
 
-# Most recent checkpoint crossings kept in the bottom splits feed (newest first).
-CP_FEED_MAX = 6
+# Minimum wall-clock gap between two splits repaints, in seconds.
+#
+# Checkpoint crossings arrive in bursts -- a 16-player pack hits the same checkpoint
+# inside about two seconds -- and every one of them used to render the board and
+# broadcast a full ManiaLink page to every client. On a 16-player round over a 4-CP
+# map that is ~80 broadcasts from crossings alone, before the HUD and ticker repaints
+# that ride along with them, all landing in the ~45 seconds when the server is
+# busiest. Clients pay a layout hitch per page replacement, which is the stutter
+# players report while the splits panel is filling up.
+#
+# Callbacks now only mark the board dirty (_queue_splits); one coalescing task does
+# the painting, at most this often. The first crossing of a burst still paints
+# immediately -- the delay only ever applies to a repaint that follows a recent one --
+# so the board stays responsive while the burst behind it collapses into one send.
+SPLITS_REFRESH_INTERVAL = 0.5
 
 
 class LiveController:
@@ -54,11 +70,27 @@ class LiveController:
 		# callback. Populated during warm-up too, so the HUD can show times before
 		# any KO round data arrives. Reset each map.
 		self.best_times = {}
-		# Checkpoint splits feed: cp_best maps a checkpoint ordinal -> the best race
-		# time (ms) seen at it this round; cp_feed is the newest-first list of recent
-		# crossings (ready-to-render row dicts). Both reset each round and map.
+		# Checkpoint splits standings board (NOT a feed -- one row per player, so a name
+		# only moves when its player is actually overtaken). cp_best maps a checkpoint
+		# ordinal -> the best race time (ms) seen at it this round; cp_rows maps a login
+		# to that player's latest crossing as a ready-to-render row dict; _cp_seq is a
+		# monotonic crossing counter used as the ordering tie-break (see split_rank_key).
+		# All reset each round and map.
 		self.cp_best = {}
-		self.cp_feed = []
+		self.cp_rows = {}
+		self._cp_seq = 0
+		# Splits repaint coalescing (see SPLITS_REFRESH_INTERVAL). _splits_dirty says a
+		# repaint is owed; _splits_task is the coroutine that pays it. The task is
+		# short-lived on purpose -- it exits as soon as it finds nothing owed -- so there
+		# is no background loop to tear down when the app stops.
+		self._splits_dirty = False
+		self._splits_task = None
+		# How many times a callback asked for a repaint. Reported by //ko splits next to
+		# the view's own send count, so the coalescing can be checked on a live server.
+		self.splits_requests = 0
+		# Same idea for the match HUD, which _refresh_overlays repaints on every
+		# KORoundOrder and every best-lap improvement. Reported by //ko hud.
+		self.overlay_refreshes = 0
 		# Fallback checkpoint counter, login -> [crossings so far, last race_time].
 		# Used when the waypoint payload carries no usable ordinal (see _cp_ordinal).
 		self.cp_counts = {}
@@ -99,15 +131,19 @@ class LiveController:
 		self._double_until = 0
 		self._order_signal = None
 		self._round_signal = None
-		# Logins that currently hold a one-time shield (warm-up fastest, etc.).
-		# Driven by KOShieldAwarded / KOShieldUsed; cleared each map.
-		self.shield_holders = set()
+		# Shields banked per login (login -> count >= 1). Authoritative from KOShieldState;
+		# KOShieldAwarded / KOShieldUsed fold in an optimistic +-1 as they land. NOT cleared
+		# per map -- stacks carry across every map of a cup, and are only reset by the mode
+		# (new cup, or //ko shields reset), which force-sends KOShieldState.
+		self.shield_counts = {}
+		# Cap the mode is enforcing (S_MaxShields), re-read each map for the HUD/diagnostics.
+		self.max_shields = MAX_SHIELD_MARKS
 		# Diagnostics surfaced by //ko hud: how many of each mode callback we have
 		# received, and the last HUD refresh error (if any).
 		self.callbacks_seen = {
 			'KOPlayerAdded': 0, 'KOPlayerRemoved': 0, 'KOSendWinner': 0,
 			'KORoundOrder': 0, 'KORoundStart': 0, 'KOMatchStandings': 0,
-			'KOShieldAwarded': 0, 'KOShieldUsed': 0,
+			'KOShieldAwarded': 0, 'KOShieldUsed': 0, 'KOShieldState': 0,
 		}
 		# Maps that ended with an EMPTY KOMatchStandings payload, i.e. the mode
 		# reported at map end but no knockout had been raced (it waits for
@@ -128,6 +164,12 @@ class LiveController:
 	def count(self):
 		return len(self.racing)
 
+	@property
+	def shield_holders(self):
+		"""Logins holding at least one shield. Kept because the match HUD and stream
+		tooling asked for the old set before shields could stack."""
+		return {login for login, count in self.shield_counts.items() if count > 0}
+
 	async def on_start(self):
 		# KORoundOrder: live ordering of the racing players (added in the mode).
 		self._order_signal = register(
@@ -138,9 +180,13 @@ class LiveController:
 		self._round_signal = register(
 			self.app, 'KORoundStart', self.on_round_start, target=parse_round_start)
 
-		# Shield earned / spent (added in the mode); simple single-login payloads.
+		# Shield earned / spent (added in the mode); simple single-login payloads. They
+		# drive the lower-third flash and the VOD markers, and fold an optimistic +-1 into
+		# the bank -- KOShieldState right behind them carries the authoritative counts
+		# (and is the only way we learn about a stack carried over from a previous map).
 		register(self.app, 'KOShieldAwarded', self.on_shield_awarded)
 		register(self.app, 'KOShieldUsed', self.on_shield_used)
+		register(self.app, 'KOShieldState', self.on_shield_state, target=parse_shield_state)
 
 		# Best-lap tracking for the HUD's times column. The finish callback fires
 		# during warm-up as well as scored rounds, so the HUD has times to show
@@ -184,11 +230,20 @@ class LiveController:
 		self.total_rounds = 0
 		self.best_times = {}
 		self.cp_best = {}
-		self.cp_feed = []
+		self.cp_rows = {}
+		self._cp_seq = 0
 		self.cp_counts = {}
-		self.shield_holders = set()
+		# NOTE: shield_counts is deliberately NOT cleared here. Shields bank up to
+		# S_MaxShields and carry across every map of a cup; the mode re-announces the
+		# whole bank with KOShieldState once the new map's knockout is seeded.
 		# Only show the HUD while a Knockout mode is loaded.
 		self.is_knockout = await self._read_is_knockout()
+		if not self.is_knockout:
+			# Left Knockout (TimeAttack rotation, BOTN practice): no mode will ever send
+			# a KOShieldState to clear these, and a stale marker on the practice roster
+			# would claim a save that cannot be spent.
+			self.shield_counts = {}
+		self.max_shields = await self._read_max_shields()
 		# Number this match for the HUD title ("MATCH n").
 		self.match_number = await self._read_match_number()
 		# Cache the double-knockout threshold so danger highlighting matches how
@@ -245,6 +300,18 @@ class LiveController:
 			return int(settings.get('S_DoubleKnockUntil', 0) or 0)
 		except (TypeError, ValueError):
 			return 0
+
+	async def _read_max_shields(self):
+		"""How many shields the mode lets a player bank (S_MaxShields). Falls back to the
+		HUD's own marker cap, which matches the mode's default."""
+		try:
+			settings = await self.instance.mode_manager.get_settings()
+		except Exception:
+			return MAX_SHIELD_MARKS
+		try:
+			return int(settings.get('S_MaxShields', MAX_SHIELD_MARKS) or 0)
+		except (TypeError, ValueError):
+			return MAX_SHIELD_MARKS
 
 	async def _read_finish_countdown(self):
 		"""Seconds the mode DNF-times stragglers after the first finisher
@@ -319,15 +386,7 @@ class LiveController:
 				split_text = format_race_time(ms)
 			else:
 				split_text = format_gap(ms - prev_best)
-			name = await self._player_name(login)
-			self.cp_feed.insert(0, dict(
-				name=name,
-				cp=split_cp_label(count, True),
-				split=split_text,
-				color='66FF66',
-			))
-			del self.cp_feed[CP_FEED_MAX:]
-			await self._refresh_splits()
+			await self._record_split(login, count, ms, split_text, True)
 
 	async def on_waypoint(self, player=None, race_time=None, race_cps=None, is_end_race=False, raw=None, **kwargs):
 		"""Feed the bottom splits panel. On each checkpoint crossing during a live
@@ -368,15 +427,33 @@ class LiveController:
 			split_text = format_race_time(ms)
 		else:
 			split_text = format_gap(ms - prev_best)
-		name = await self._player_name(login)
-		self.cp_feed.insert(0, dict(
-			name=name,
-			cp=split_cp_label(count, is_end_race),
+		await self._record_split(login, count, ms, split_text, is_end_race)
+
+	async def _record_split(self, login, count, ms, split_text, is_end_race):
+		"""Put this player's latest crossing on the splits standings board.
+
+		One row per player: a new crossing REPLACES that player's row rather than being
+		pushed onto a feed, which is what stops every name shuffling down a place each
+		time somebody -- anybody -- hits a checkpoint. Ordering is applied at render time
+		by order_split_rows, so a row only moves when it is genuinely overtaken.
+
+		The latest crossing always wins, including one that goes backwards: a give-up and
+		restart really has lost the progress (_cp_ordinal resets on a rewound race time
+		for the same reason), and the board reports where a player is now.
+		"""
+		self._cp_seq += 1
+		self.cp_rows[login] = dict(
+			login=login,
+			name=await self._player_name(login),
+			cp=count,
+			ms=ms,
+			finished=bool(is_end_race),
+			seq=self._cp_seq,
+			cp_label=split_cp_label(count, is_end_race),
 			split=split_text,
 			color='66FF66',
-		))
-		del self.cp_feed[CP_FEED_MAX:]
-		await self._refresh_splits()
+		)
+		self._queue_splits()
 
 	def _cp_ordinal(self, login, ms):
 		"""Checkpoint ordinal for a crossing whose payload carried none: how many
@@ -398,7 +475,19 @@ class LiveController:
 		once per round, so anyone arriving after the first finisher -- the stream
 		box reconnecting, or a player just knocked into spectator -- would sit
 		through the rest of the round with no card.
+
+		The match HUD, the splits board and the stream ticker self-heal only because of
+		the invalidate() calls below. All three now drop a repaint that would redraw
+		what is already on screen, and "already on screen" is a statement about the
+		clients that were connected last time -- not about the one that just joined
+		holding no page at all. Miss one of these and a new arrival gets a permanently
+		blank overlay.
 		"""
+		for name in ('hud', 'splits', 'ticker'):
+			view = getattr(self.app, name, None)
+			invalidate = getattr(view, 'invalidate', None)
+			if invalidate is not None:
+				invalidate()
 		await self._refresh_overlays()
 		player = kwargs.get('player') or (args[0] if args else None)
 		await self._resend_countdown(getattr(player, 'login', None))
@@ -486,7 +575,8 @@ class LiveController:
 		# re-arms it, and reset the per-round checkpoint splits.
 		self._countdown_armed = False
 		self.cp_best = {}
-		self.cp_feed = []
+		self.cp_rows = {}
+		self._cp_seq = 0
 		self.cp_counts = {}
 		# Self-heal when the plugin missed KOPlayerAdded (reload mid-map, callback
 		# glitch, etc.): a real scored round means we are live. Without this, phase
@@ -506,7 +596,8 @@ class LiveController:
 		self.callbacks_seen['KOShieldAwarded'] = self.callbacks_seen.get('KOShieldAwarded', 0) + 1
 		login = callback_login(kwargs)
 		if login:
-			self.shield_holders.add(login)
+			self.shield_counts = apply_shield_delta(
+				self.shield_counts, login, 1, cap=self.max_shields)
 		await self._flash_shield(login, awarded=True)
 		await self._mark('shield_awarded', login)
 		await self._refresh_overlays()
@@ -515,9 +606,18 @@ class LiveController:
 		self.callbacks_seen['KOShieldUsed'] = self.callbacks_seen.get('KOShieldUsed', 0) + 1
 		login = callback_login(kwargs)
 		if login:
-			self.shield_holders.discard(login)
+			self.shield_counts = apply_shield_delta(
+				self.shield_counts, login, -1, cap=self.max_shields)
 		await self._flash_shield(login, awarded=False)
 		await self._mark('shield_used', login)
+		await self._refresh_overlays()
+
+	async def on_shield_state(self, counts=None, **kwargs):
+		"""The mode's authoritative shield bank. Replaces our copy wholesale, so a stack
+		carried over from a previous map (or one earned while this controller was
+		reloading) shows up even though we never saw the KOShieldAwarded that earned it."""
+		self.callbacks_seen['KOShieldState'] = self.callbacks_seen.get('KOShieldState', 0) + 1
+		self.shield_counts = dict(counts or {})
 		await self._refresh_overlays()
 
 	# --------------------------------------------------------------- derived
@@ -596,7 +696,10 @@ class LiveController:
 
 	async def _refresh_overlays(self):
 		# Stream ticker (spectators + /ko stream, or everyone if show_overlays) and
-		# the always-on match HUD are gated independently.
+		# the always-on match HUD are gated independently. The HUD and splits views
+		# both drop a repaint that would redraw what is already on screen, so calling
+		# this often is cheap -- but see on_roster_change for what that costs.
+		self.overlay_refreshes += 1
 		ticker = getattr(self.app, 'ticker', None)
 		if ticker is not None:
 			try:
@@ -622,20 +725,60 @@ class LiveController:
 				except Exception:
 					logger.exception('Knockout: failed to hide match HUD')
 
-		await self._refresh_splits()
+		self._queue_splits()
+
+	def _queue_splits(self):
+		"""Mark the splits board dirty and make sure a repaint is coming.
+
+		Synchronous on purpose: this is called from race callbacks that fire once per
+		checkpoint per player, and it must cost nothing but a flag. The render and the
+		ManiaLink push happen in _splits_paint_loop, at most once per
+		SPLITS_REFRESH_INTERVAL.
+		"""
+		self.splits_requests += 1
+		self._splits_dirty = True
+		if self._splits_task is None or self._splits_task.done():
+			self._splits_task = asyncio.ensure_future(self._splits_paint_loop())
+
+	async def _splits_paint_loop(self):
+		"""Paint the splits board while repaints are owed, then exit.
+
+		Paint-then-wait, not wait-then-paint: the first request after a quiet spell is
+		served immediately, and only the requests that pile up behind it are collapsed.
+		The task ends once an interval passes with nothing new, so the next burst is
+		again painted on its first crossing.
+		"""
+		try:
+			while self._splits_dirty:
+				self._splits_dirty = False
+				await self._refresh_splits()
+				await asyncio.sleep(SPLITS_REFRESH_INTERVAL)
+		except asyncio.CancelledError:
+			raise
+		except Exception:
+			# _refresh_splits swallows its own render errors, so anything reaching here
+			# is the coalescing itself failing. Log it: the next _queue_splits would
+			# otherwise quietly start a fresh task over the same broken board.
+			logger.exception('Knockout: splits repaint loop failed')
 
 	async def _refresh_splits(self):
-		"""Show the bottom splits feed during a live round (gated on the match-HUD
-		toggle), and hide it the moment the round ends, warm-up returns, or the feed
-		is empty -- so it never lingers between rounds."""
+		"""Show the bottom splits standings during a live round (gated on the match-HUD
+		toggle), and hide it when the round ends, warm-up returns, or nobody has crossed
+		a checkpoint yet -- so it never lingers between rounds.
+
+		Call _queue_splits() instead of this from anything a race callback can reach.
+		This renders and pushes unconditionally; the queue is what keeps a burst of
+		checkpoint crossings from doing so once per crossing.
+		"""
 		view = getattr(self.app, 'splits', None)
 		if view is None:
 			return
 		live_round = self.round > 0 and self.phase in ('racing', 'showdown')
 		enabled = await self._match_hud_enabled()
+		rows = order_split_rows(self.cp_rows.values(), racing=self.racing, limit=SPLITS_ROWS)
 		try:
-			if enabled and live_round and self.cp_feed:
-				await view.refresh(self.cp_feed)
+			if enabled and live_round and rows:
+				await view.refresh(rows)
 			else:
 				await view.hide()
 			self.last_splits_error = None
@@ -715,13 +858,15 @@ class LiveController:
 		if lower is None or not login:
 			return
 		name = await self._player_name(login)
+		count = self.shield_counts.get(login, 0)
 		# U+271A (✚, Dingbats block) renders in the ManiaPlanet font; the U+1F6E1
 		# shield emoji is supplementary-plane and showed as an empty box. Matches the
 		# ❌/★ glyphs used by the elimination/winner flashes above.
 		if awarded:
-			msg = '$09f✚ $fff{}$09f earned a shield (fastest warm-up)!'.format(name)
+			msg = '$09f✚ $fff{}$09f earned a shield (fastest warm-up) — {} banked!'.format(
+				name, count)
 		else:
-			msg = '$09f✚ $fff{}$09f used a shield to survive!'.format(name)
+			msg = '$09f✚ $fff{}$09f used a shield to survive — {} left!'.format(name, count)
 		await lower.flash(msg)
 
 	def _lower_third(self):

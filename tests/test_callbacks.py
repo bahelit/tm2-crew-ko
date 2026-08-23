@@ -120,6 +120,33 @@ def test_parse_standings_name_pair_shape():
 	assert standings[0]['login'] == 'alice'
 
 
+# ------------------------------------------------------------ parse_shield_state
+
+def test_parse_shield_state_counts():
+	counts = _run(cb.parse_shield_state(['alice:3', 'bob:1']))['counts']
+	assert counts == {'alice': 3, 'bob': 1}
+
+
+def test_parse_shield_state_skips_entries_without_a_colon():
+	# An empty bank arrives as the bare callback name. Without the separator guard
+	# "KOShieldState" itself would be read as a player holding shields.
+	assert _run(cb.parse_shield_state(['KOShieldState']))['counts'] == {}
+
+
+def test_parse_shield_state_ignores_non_integer_and_non_positive_counts():
+	src = ['alice:3', 'bob:zero', 'cara:0', 'dan:-1', ':4']
+	assert _run(cb.parse_shield_state(src))['counts'] == {'alice': 3}
+
+
+def test_parse_shield_state_name_pair_shape():
+	counts = _run(cb.parse_shield_state(['KOShieldState', ['alice:2']]))['counts']
+	assert counts == {'alice': 2}
+
+
+def test_parse_shield_state_empty_payload_is_an_empty_bank():
+	assert _run(cb.parse_shield_state([]))['counts'] == {}
+
+
 # ----------------------------------------------------------------- first_login
 
 def test_first_login_list():
@@ -164,6 +191,7 @@ def test_all_callbacks_is_the_full_contract():
 	assert set(cb.ALL_CALLBACKS) == {
 		'KOPlayerAdded', 'KOPlayerRemoved', 'KOSendWinner', 'KOMatchStandings',
 		'KORoundOrder', 'KORoundStart', 'KOShieldAwarded', 'KOShieldUsed',
+		'KOShieldState',
 	}
 
 
@@ -219,7 +247,7 @@ def test_make_callback_keeps_signal_identity_unprefixed():
 
 
 def test_every_contract_callback_gets_its_own_dispatch_key():
-	# One shared key would let the eight callbacks overwrite each other in
+	# One shared key would let the nine callbacks overwrite each other in
 	# SignalManager.callbacks -- the second failure mode of the transport-name bug.
 	keys = {code: _make_callback(code)['call'] for code in cb.ALL_CALLBACKS}
 	assert len(set(keys.values())) == len(cb.ALL_CALLBACKS)

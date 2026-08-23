@@ -1,5 +1,7 @@
 <!--
-	Bottom right, 64 wide (x 62..126) and up to ~31 tall with a full six-row feed.
+	Bottom right, 64 wide (x 62..126) and up to ~31 tall with a full six-row board.
+	One row per player, ordered by race progress (see hud_format.order_split_rows) -- a
+	row moves only when its player is overtaken, so names stay readable mid-round.
 	x=62 keeps the panel clear of the game's own checkpoint/time widget under the
 	centre of the screen (its right edge sits near x=50) and of the stream lower
 	third (which ends at x=60). The finish countdown shares this corner and is
@@ -18,7 +20,7 @@
 	<label pos="2. {{ row.y }}." size="34. 3.5." halign="left" valign="top" z-index="1"
 		textsize="1" textfont="GameFontSemiBold" textcolor="FFFFFF" text="{{ row.name }}" />
 	<label pos="40. {{ row.y }}." size="14. 3.5." halign="left" valign="top" z-index="1"
-		textsize="1" textfont="GameFontSemiBold" textcolor="AAAAAA" text="{{ row.cp }}" />
+		textsize="1" textfont="GameFontSemiBold" textcolor="AAAAAA" text="{{ row.cp_label }}" />
 	<label pos="62. {{ row.y }}." size="18. 3.5." halign="right" valign="top" z-index="1"
 		textsize="1" textfont="GameFontSemiBold" textcolor="{{ row.color }}" text="{{ row.split }}" />
 	{% endfor %}

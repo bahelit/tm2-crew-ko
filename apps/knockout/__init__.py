@@ -271,6 +271,12 @@ class KnockoutConfig(AppConfig):
 		# Users_SetNbFakeUsers(0, 0) and wipe the bots just as the cup begins.
 		self.fake_players_wanted = 0
 
+		# Last S_ShieldEpoch token we pushed at the mode. Bumping it is how the app tells
+		# a RUNNING Knockout to drop every banked shield (they now carry across the maps
+		# of a cup, so nothing else clears them). Surfaced by //ko shields.
+		self.shield_epoch = ''
+		self._shield_epoch_seq = 0
+
 		# Cup presets (names / mode presets / payouts). Prefer an explicit path from
 		# the PyPlanet settings file or //settings; otherwise use the bundled defaults
 		# that ship inside apps/knockout/ so a plain deploy gets friday/weekly/quick.
@@ -569,28 +575,76 @@ class KnockoutConfig(AppConfig):
 				targets.append(entry)
 		return targets
 
-	async def push_stream_view(self, view, visible=True):
+	@staticmethod
+	def _stream_send_needed(view, signature, audience):
+		"""Whether push_stream_view still has to send.
+
+		``audience`` describes the shape of the send as well as who receives it, so
+		switching between the hidden, global and per-login paths always repaints even
+		when the content is untouched. A view with no ``signature`` is never deduped.
+
+		Pure: _stream_mark_sent records the result, and only once the send actually
+		succeeded.
+		"""
+		if signature is None:
+			return True
+		return getattr(view, 'stream_sent', None) != (audience, signature)
+
+	@staticmethod
+	def _stream_mark_sent(view, signature, audience):
+		"""Record what the clients are now showing, after a successful push.
+
+		Deliberately not folded into _stream_send_needed: recording before the await
+		would mean a transient send failure left us believing a page is on screen that
+		never arrived, and every identical refresh afterwards would skip -- the overlay
+		would stay stale until its content happened to change.
+		"""
+		view.sends = getattr(view, 'sends', 0) + 1
+		if signature is not None:
+			view.stream_sent = (audience, signature)
+
+	async def push_stream_view(self, view, visible=True, signature=None):
 		"""Show or hide a stream overlay for the current target set.
 
 		When ``visible`` is False the view is hidden for everyone. When True it is
 		pushed to global (if show_overlays) or to each spectator/opt-in client, and
 		explicitly hidden for everyone else so a racer who was spectating loses it.
+
+		``signature`` is a hashable summary of what the view would draw. Pass one and a
+		push that would repaint what these same clients are already showing is dropped
+		-- the ticker is refreshed from every overlay refresh, dozens of times a round,
+		and most of those leave it identical. The audience is folded in on top of the
+		signature, so a change of who is watching always sends.
+
+		Pass None -- as the lower third does -- to send unconditionally. A flash is an
+		event, not a state: two identical flashes must both fire, and deduping them
+		would silently swallow the second elimination in a row.
 		"""
 		if view is None:
 			return
 		if not visible:
+			audience = ('hidden',)
+			if not self._stream_send_needed(view, signature, audience):
+				return
 			try:
 				await view.hide()
 			except Exception:
 				logger.exception('Knockout: failed to hide stream view')
+				return
+			self._stream_mark_sent(view, signature, audience)
 			return
 
 		targets = await self.stream_overlay_targets()
 		if targets is None:
+			audience = ('global',)
+			if not self._stream_send_needed(view, signature, audience):
+				return
 			try:
 				await view.display()
 			except Exception:
 				logger.exception('Knockout: failed to display stream view globally')
+				return
+			self._stream_mark_sent(view, signature, audience)
 			return
 
 		try:
@@ -611,6 +665,9 @@ class KnockoutConfig(AppConfig):
 		online_logins = _logins(online)
 		show = sorted(target_logins & online_logins)
 		hide = sorted(online_logins - target_logins)
+		audience = ('targeted', tuple(show), tuple(hide))
+		if not self._stream_send_needed(view, signature, audience):
+			return
 		try:
 			if show:
 				await view.display(player_logins=show)
@@ -618,6 +675,8 @@ class KnockoutConfig(AppConfig):
 				await view.hide(player_logins=hide)
 		except Exception:
 			logger.exception('Knockout: failed to push stream view')
+			return
+		self._stream_mark_sent(view, signature, audience)
 
 
 	async def apply_mode_preset(self, script=None, settings=None, restart=True):
@@ -708,6 +767,13 @@ class KnockoutConfig(AppConfig):
 					await self.enable_script_callbacks()
 					if settings:
 						await _apply(stage=False)
+					# A new cup starts with an empty shield bank. A fresh script load
+					# already empties it, but //cup on with Knockout ALREADY running may
+					# not reload the script -- so bump the epoch too. Its own call, never
+					# folded into the batch above: an older script on the server would
+					# fault the whole push and take warm-up laps and bots down with it.
+					if 'knockout' in (script or '').lower():
+						await self.push_shield_epoch(reason='cup')
 				return ok
 			# Queued only: settings stay staged for the next map.
 			return True
@@ -716,6 +782,52 @@ class KnockoutConfig(AppConfig):
 		if settings:
 			await _apply(stage=False)
 		return True
+
+	async def push_shield_epoch(self, reason='cup'):
+		"""Bump the mode's hidden ``S_ShieldEpoch`` so Knockout clears every banked shield.
+
+		Shields stack and carry across every map of a cup, so the only two things that
+		should empty the bank are a new cup and an explicit ``//ko shields reset``. A
+		fresh script load empties it for free (mode globals start empty), but ``//cup on``
+		while Knockout is already running may not reload the script at all -- hence this
+		token. The mode compares it against its own copy and only acts on a change, so
+		re-pushing the same value (apply_mode_preset pushes its settings twice) is a no-op.
+
+		Returns None on success, or a short reason string -- same contract as
+		``CupCommands._set_debug_bots``. ``S_ShieldEpoch`` exists only in an updated
+		Knockout.Script.txt and the dedicated server faults the WHOLE
+		SetModeScriptSettings batch on one unknown key, so probe before pushing, and
+		always push on its own rather than folding this into a preset batch.
+		"""
+		import time as _time
+
+		try:
+			settings = await self.instance.mode_manager.get_settings()
+		except Exception:
+			logger.exception('Knockout: could not read the running mode settings')
+			settings = None
+
+		if settings is not None and 'S_ShieldEpoch' not in settings:
+			script = ''
+			try:
+				script = (await self.instance.mode_manager.get_current_script()) or ''
+			except Exception:
+				pass
+			return 'the running mode ({}) has no S_ShieldEpoch; deploy the current Knockout.Script.txt'.format(
+				script.rsplit('/', 1)[-1] or 'unknown')
+
+		# The sequence suffix matters: two resets inside the same wall-clock second would
+		# otherwise produce an identical token, and the mode's equality check would make
+		# the second one a silent no-op.
+		self._shield_epoch_seq += 1
+		token = '{}-{}-{}'.format(reason, int(_time.time()), self._shield_epoch_seq)
+		try:
+			await self.instance.mode_manager.update_settings({'S_ShieldEpoch': token})
+		except Exception as exc:
+			logger.exception('Knockout: could not push S_ShieldEpoch')
+			return '{}: {}'.format(type(exc).__name__, exc)
+		self.shield_epoch = token
+		return None
 
 	def arm_cup_handoff_immediately(self):
 		"""Set the cup handoff flag synchronously (see capture.record_match)."""

@@ -10,7 +10,7 @@ from ..callbacks import (
 	parse_round_order, parse_round_start, parse_shield_state, callback_login, register)
 from ..hud_format import (
 	format_race_time, format_gap, split_cp_label, waypoint_cp_count, describe_payload,
-	apply_shield_delta, order_split_rows, MAX_SHIELD_MARKS, SPLITS_ROWS)
+	apply_shield_delta, order_split_rows, MAX_SHIELD_MARKS, SHIELD_MARK, SPLITS_ROWS)
 
 logger = logging.getLogger(__name__)
 
@@ -844,14 +844,17 @@ class LiveController:
 			return
 		name = await self._player_name(login)
 		left = self.count
-		await lower.flash('$f00❌ $fff{}$f00 knocked out — $fff{}$f00 left'.format(name, left))
+		# ASCII marker, like SHIELD_MARK -- the game fonts have no Dingbats, so the U+274C
+		# cross this used to draw came out as an empty box.
+		await lower.flash('$f00X $fff{}$f00 knocked out — $fff{}$f00 left'.format(name, left))
 
 	async def _flash_winner(self, login):
 		lower = self._lower_third()
 		if lower is None:
 			return
 		name = await self._player_name(login)
-		await lower.flash('$0f0★ $fff{}$0f0 wins the round!'.format(name))
+		# ASCII marker; U+2605 is outside the game fonts (see _flash_elimination).
+		await lower.flash('$0f0* $fff{}$0f0 wins the round!'.format(name))
 
 	async def _flash_shield(self, login, awarded):
 		lower = self._lower_third()
@@ -859,14 +862,15 @@ class LiveController:
 			return
 		name = await self._player_name(login)
 		count = self.shield_counts.get(login, 0)
-		# U+271A (✚, Dingbats block) renders in the ManiaPlanet font; the U+1F6E1
-		# shield emoji is supplementary-plane and showed as an empty box. Matches the
-		# ❌/★ glyphs used by the elimination/winner flashes above.
+		# Marker is SHIELD_MARK ('+') for the same reason the HUD uses it: neither the
+		# U+1F6E1 shield emoji nor the U+271A cross exists in the ManiaPlanet game fonts,
+		# so both drew as an empty box.
 		if awarded:
-			msg = '$09f✚ $fff{}$09f earned a shield (fastest warm-up) — {} banked!'.format(
-				name, count)
+			msg = '$09f{} $fff{}$09f earned a shield (fastest warm-up) — {} banked!'.format(
+				SHIELD_MARK, name, count)
 		else:
-			msg = '$09f✚ $fff{}$09f used a shield to survive — {} left!'.format(name, count)
+			msg = '$09f{} $fff{}$09f used a shield to survive — {} left!'.format(
+				SHIELD_MARK, name, count)
 		await lower.flash(msg)
 
 	def _lower_third(self):

@@ -108,7 +108,7 @@ bank; `//ko shields reset` clears it.
 | **Reset** | A new cup (`//cup on` / `//cup setup`), or `//ko shields reset`. Nothing else empties the bank |
 | **Spend** | Only when that player would be eliminated (not DNF / give-up); one shield per save |
 | **Effect** | Saves them only; does not knock the next player |
-| **HUD** | One `✚` per banked shield next to the name on the left match board |
+| **HUD** | One `+` per banked shield next to the name on the left match board |
 | **Warm-up** | Friday: **2 rounds** (`S_WarmUpNb=2`); each ends when everyone has finished, capped at 2 min (`S_WarmUpDuration=120`). BOTN uses the same cap with `botn_warmup_laps` rounds. Give-up respawns the player at the start (practice lap, not a withdrawal) — Friday and BOTN alike |
 | **Back to TA** | Warm-up settings are zeroed on every return to TimeAttack — mode settings persist by name, so otherwise the idle server keeps warming up |
 

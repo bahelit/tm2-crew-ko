@@ -20,8 +20,9 @@
 		textsize="2" textfont="GameFontBlack" textcolor="FFCC00"
 		text="{{ count }} RACING" />
 	{% for row in danger_rows %}
+	<!-- ASCII marker: the game fonts have no U+26A0, which drew as an empty box -->
 	<label pos="0. {{ row.y }}" size="44. 3." halign="center" valign="top" z-index="1"
-		textsize="1" textcolor="FF3333" text="⚠ {{ row.name }}" />
+		textsize="1" textcolor="FF3333" text="! {{ row.name }}" />
 	{% endfor %}
 	{% endif %}
 </frame>

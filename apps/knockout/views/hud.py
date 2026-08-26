@@ -201,7 +201,7 @@ class MatchHud(TemplateView):
 		) if self.show_map else ''
 		danger = set() if practice else set(live.danger_logins())
 		# login -> shields banked. Stacks up to S_MaxShields and carries across the maps
-		# of a cup, so the HUD draws one ✚ per shield rather than a single marker.
+		# of a cup, so the HUD draws one + per shield rather than a single marker.
 		shield_counts = dict(getattr(live, 'shield_counts', None) or {})
 
 		# Points column (running cup total) is part of the CotD-style match HUD during

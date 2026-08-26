@@ -151,29 +151,29 @@ def test_is_practice_phase():
 def test_format_hud_name_shield_marker():
 	# The pre-stacking boolean is kept as a legacy alias meaning "one shield".
 	assert hud.format_hud_name('Alice', has_shield=False) == 'Alice'
-	assert hud.format_hud_name('Alice', has_shield=True) == 'Alice ✚'
-	assert hud.format_hud_name('', has_shield=True) == '✚'
+	assert hud.format_hud_name('Alice', has_shield=True) == 'Alice +'
+	assert hud.format_hud_name('', has_shield=True) == '+'
 	assert hud.format_hud_name(None, has_shield=False) == ''
 
 
 def test_format_hud_name_repeats_the_mark_per_banked_shield():
 	assert hud.format_hud_name('Alice', shields=0) == 'Alice'
-	assert hud.format_hud_name('Alice', shields=1) == 'Alice ✚'
-	assert hud.format_hud_name('Alice', shields=2) == 'Alice ✚✚'
-	assert hud.format_hud_name('Alice', shields=3) == 'Alice ✚✚✚'
+	assert hud.format_hud_name('Alice', shields=1) == 'Alice +'
+	assert hud.format_hud_name('Alice', shields=2) == 'Alice ++'
+	assert hud.format_hud_name('Alice', shields=3) == 'Alice +++'
 
 
 def test_format_hud_name_clamps_the_shield_count():
 	# The mode caps at S_MaxShields, but the HUD must not draw a name off the row
 	# if that setting is ever raised past what the column can hold.
-	assert hud.format_hud_name('Alice', shields=5) == 'Alice ✚✚✚'
+	assert hud.format_hud_name('Alice', shields=5) == 'Alice +++'
 	assert hud.format_hud_name('Alice', shields=-1) == 'Alice'
 	assert hud.format_hud_name('Alice', shields='abc') == 'Alice'
 
 
 def test_format_hud_name_count_wins_over_the_legacy_flag():
 	assert hud.format_hud_name('Alice', has_shield=True, shields=0) == 'Alice'
-	assert hud.format_hud_name('Alice', has_shield=False, shields=2) == 'Alice ✚✚'
+	assert hud.format_hud_name('Alice', has_shield=False, shields=2) == 'Alice ++'
 
 
 # --------------------------------------------------------- shield bank deltas

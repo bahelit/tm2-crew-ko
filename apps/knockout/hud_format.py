@@ -369,8 +369,10 @@ def is_practice_phase(is_knockout, cup_active, botn_active=False, botn_phase='id
 	return bool(cup_active)
 
 
-# Font-safe shield marker (U+271A). The shield emoji does not render in ManiaPlanet.
-SHIELD_MARK = '✚'
+# Font-safe shield marker. Keep this ASCII: the ManiaPlanet game fonts carry Latin-1
+# and little else, so the shield emoji (U+1F6E1) and the Dingbats cross (U+271A) both
+# drew as an empty box on the HUD.
+SHIELD_MARK = '+'
 
 # Most shields we will ever draw on a name, and the default bank cap. Matches the mode's
 # S_MaxShields default; the live cap is read from the mode at map start.
@@ -378,8 +380,8 @@ MAX_SHIELD_MARKS = 3
 
 
 def format_hud_name(name, has_shield=False, shields=None):
-	"""Player name as shown on a match-HUD row, with one ✚ per banked shield (capped
-	at MAX_SHIELD_MARKS): ``[TM2C]ogiewan ✚✚✚``. Shields stack and carry across the
+	"""Player name as shown on a match-HUD row, with one ``+`` per banked shield (capped
+	at MAX_SHIELD_MARKS): ``[TM2C]ogiewan +++``. Shields stack and carry across the
 	maps of a cup, so the count matters, not just the fact of holding one.
 
 	``shields`` is the count. ``has_shield`` is the pre-stacking boolean and is kept as

@@ -995,7 +995,7 @@ Void XmlRpc_KOShieldUsed(CTmPlayer _Player) {
 }
 
 /** The whole shield bank as ["login:count", ...]. Empty when shields are disabled, so
-    turning them off mid-cup clears the HUD marks rather than leaving behind ✚ that can
+    turning them off mid-cup clears the HUD marks rather than leaving behind marks that can
     never be spent. */
 Void XmlRpc_KOShieldState() {
 	if (!XmlRpc::CanSendCallback("KOShieldState")) return;

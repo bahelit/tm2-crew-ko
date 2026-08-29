@@ -66,7 +66,7 @@
 
 #Extends "Modes/TrackMania/Base/RoundsBase2.Script.txt"
 
-#Const Version		"2026-08-22a"
+#Const Version		"2026-08-28"
 #Const ScriptName	"Knockout.Script.txt"
 
 // Our own minimal message lib (no domino54).
@@ -93,7 +93,7 @@
 #Setting S_WarmUpNb				0		as _("Warm-up rounds before the knockout begins (0 = none):")
 #Setting S_WarmUpDuration		-1		as _("Warm-up time cap per round in seconds (-1 = none; a round ends when everyone is done):")
 #Setting S_FinishCountdown		30		as _("Seconds to finish after the first player (DNFs the rest):")
-#Setting S_EnableShields		False	as _("Earned shields: warm-up fastest banks a one-time save:")
+#Setting S_EnableShields		False	as _("Earned shields: 2nd-to-last warm-up banks a one-time save:")
 #Setting S_MaxShields			3		as _("Maximum shields a player can bank (0 = shields off):")
 #Setting S_DebugBotsCount		0		as _("Number of fake players (debug only):")
 #Setting S_AdminHoldStart		False	as "<hidden>" ///< Allows event admin to pause start of the next Knockout
@@ -113,6 +113,7 @@
 // Constants
 // ---------------------------------- //
 #Const C_RequiredPlayersNb	2	///< Minimum players amount to start the game
+#Const C_ShieldMinPlayers	5	///< Shields are not awarded when the knockout field is smaller than this
 
 // Use the stock Rounds HUD so the scores table shows the survival-POINTS column
 // (the default HUD shows a race-time column instead). Loaded in Match_LoadHud.
@@ -594,7 +595,7 @@ foreach (Event in PendingEvents) {
 			HasFinishedTrack = True;
 
 			// First finisher of the round: arm the finish countdown and announce.
-			// Shields are earned from warm-up (fastest lap), not from round wins —
+			// Shields are earned from warm-up (2nd-to-last time), not from round wins —
 			// see AwardWarmUpShield in StartKnockout.
 			// Setting CutOffTimeLimit drives the on-screen countdown; the base's
 			// Match_PlayLoop stops the round when it expires, and Match_EndRound
@@ -1087,7 +1088,7 @@ Boolean WarmUpFieldIsDone(Text[] _Finishers) {
 
 /** Warm-up that records best finish times for shield awards.
     Stock MB_WarmUp only Valid()s events and never stores BestRace, so the
-    warm-up-fastest shield path always saw an empty field. This mirrors the base
+    warm-up shield path always saw an empty field. This mirrors the base
     warm-up UI (WarmUp::Start/StartRound/End) while filling G_WarmUpBestTimes.
 
     _CapMillisec is a BACKSTOP, not the round length: a warm-up round is over as soon
@@ -1227,26 +1228,49 @@ Boolean AwardShield(CTmPlayer _Player) {
 	return True;
 }
 
-/** Give the player with the fastest warm-up race a shield (if enabled and under the cap).
+/** Give a shield to the player with the second-slowest warm-up time (if enabled
+    and under the cap). Fastest-warm-up used to bank the save and stacked an extra
+    advantage on whoever was already likely to survive; 2nd-to-last helps a player
+    near the bubble instead. A shield in a 4-player knockout would dominate, so
+    nothing is awarded when the field is smaller than C_ShieldMinPlayers.
     Must be defined before StartKnockout (ManiaScript resolves callees top-down).
     Reads G_WarmUpBestTimes, filled by KO_WarmUp. */
 Void AwardWarmUpShield() {
 	if (!S_EnableShields || S_MaxShields <= 0) return;
-	declare CTmPlayer BestPlayer;
-	BestPlayer = Null;
-	declare Integer BestTime;
-	BestTime = -1;
 
-	// Primary: times tracked during KO_WarmUp (look up by login on the player list).
+	declare Integer FieldSize = 0;
+	foreach (Player in Players) {
+		if (Player.User == Null) continue;
+		FieldSize += 1;
+	}
+	if (FieldSize < C_ShieldMinPlayers) return;
+
+	declare CTmPlayer LastPlayer;
+	LastPlayer = Null;
+	declare Integer LastTime;
+	LastTime = -1;
+	declare CTmPlayer SecondLastPlayer;
+	SecondLastPlayer = Null;
+	declare Integer SecondLastTime;
+	SecondLastTime = -1;
+
+	// Rank by time among players still on the server (look up by login). Slowest
+	// is last; the next-slowest is 2nd-to-last. Ties: a time equal to Last stays
+	// on the second-last slot, so two identical slowest times share last / 2nd-last.
 	foreach (Player in Players) {
 		if (Player.User == Null) continue;
 		declare Text Login = Player.User.Login;
 		if (!G_WarmUpBestTimes.existskey(Login)) continue;
 		declare Integer T = G_WarmUpBestTimes[Login];
 		if (T <= 0) continue;
-		if (BestTime < 0 || T < BestTime) {
-			BestTime = T;
-			BestPlayer = Player;
+		if (LastTime < 0 || T > LastTime) {
+			SecondLastTime = LastTime;
+			SecondLastPlayer = LastPlayer;
+			LastTime = T;
+			LastPlayer = Player;
+		} else if (SecondLastTime < 0 || T > SecondLastTime) {
+			SecondLastTime = T;
+			SecondLastPlayer = Player;
 		}
 	}
 
@@ -1257,13 +1281,13 @@ Void AwardWarmUpShield() {
 	// carry it would inflate a bank by one every map. KO_WarmUp fills G_WarmUpBestTimes
 	// reliably, so the fallback has no job left.
 
-	if (BestPlayer != Null) {
-		if (AwardShield(BestPlayer)) {
-			Notify::SendChat(["$<%1$> earns a shield for the fastest warm-up! (%2 banked)",
-				BestPlayer.User.Name, TL::ToText(G_ShieldTokens[BestPlayer.User.Login])]);
+	if (SecondLastPlayer != Null) {
+		if (AwardShield(SecondLastPlayer)) {
+			Notify::SendChat(["$<%1$> earns a shield for 2nd-to-last in warm-up! (%2 banked)",
+				SecondLastPlayer.User.Name, TL::ToText(G_ShieldTokens[SecondLastPlayer.User.Login])]);
 		} else {
-			Notify::SendChat(["$<%1$> was fastest in warm-up but already holds %2 shields.",
-				BestPlayer.User.Name, TL::ToText(S_MaxShields)]);
+			Notify::SendChat(["$<%1$> was 2nd-to-last in warm-up but already holds %2 shields.",
+				SecondLastPlayer.User.Name, TL::ToText(S_MaxShields)]);
 		}
 	}
 }
@@ -1296,8 +1320,9 @@ Void StartKnockout() {
 		G_PreShieldsGranted = True;
 	}
 
-	// After warm-up (KO_WarmUp runs before WaitForPlayers → StartKnockout), the fastest
-	// warm-up finish in G_WarmUpBestTimes banks another shield, up to S_MaxShields.
+	// After warm-up (KO_WarmUp runs before WaitForPlayers → StartKnockout), the
+	// 2nd-to-last warm-up time in G_WarmUpBestTimes banks another shield, up to
+	// S_MaxShields — skipped when the field is smaller than C_ShieldMinPlayers.
 	AwardWarmUpShield();
 
 	// Re-announce the whole bank for the new map. Forced (and with the throttle signature

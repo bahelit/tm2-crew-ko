@@ -866,7 +866,7 @@ class LiveController:
 		# U+1F6E1 shield emoji nor the U+271A cross exists in the ManiaPlanet game fonts,
 		# so both drew as an empty box.
 		if awarded:
-			msg = '$09f{} $fff{}$09f earned a shield (fastest warm-up) — {} banked!'.format(
+			msg = '$09f{} $fff{}$09f earned a shield (2nd-to-last warm-up) — {} banked!'.format(
 				SHIELD_MARK, name, count)
 		else:
 			msg = '$09f{} $fff{}$09f used a shield to survive — {} left!'.format(

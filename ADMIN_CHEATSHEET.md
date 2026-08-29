@@ -102,8 +102,8 @@ bank; `//ko shields reset` clears it.
 
 | | |
 |---|---|
-| **Earn** | Fastest warm-up finish → one shield, once per map |
-| **Cap** | Stacks up to `S_MaxShields` (default **3**); at the cap the warm-up winner earns nothing and chat says so |
+| **Earn** | 2nd-to-last warm-up finish → one shield, once per map. **No shield** when the field is 4 or fewer |
+| **Cap** | Stacks up to `S_MaxShields` (default **3**); at the cap the 2nd-to-last earns nothing and chat says so |
 | **Carry** | Unspent shields survive the map change and carry across **every map of the cup** |
 | **Reset** | A new cup (`//cup on` / `//cup setup`), or `//ko shields reset`. Nothing else empties the bank |
 | **Spend** | Only when that player would be eliminated (not DNF / give-up); one shield per save |
